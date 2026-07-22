@@ -236,9 +236,9 @@
    Browsers can't call wienerlinien.at directly (no CORS headers), so all
    requests go through a tiny proxy you control. Deploy proxy-worker.js
    to Cloudflare Workers (free) and paste its URL here, e.g.:
-     const PROXY_URL = 'https://wiengo.bernhard-hack.workers.dev/';
+     const PROXY_URL = 'https://wiengo-proxy.YOURNAME.workers.dev';
    Leave '' to try direct calls (works only in CORS-disabled contexts). */
-const PROXY_URL = '';
+const PROXY_URL = 'https://wiengo.bernhard-hack.workers.dev';
 
 const WL = 'https://www.wienerlinien.at';
 const URLS = {
