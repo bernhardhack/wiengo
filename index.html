@@ -54,6 +54,7 @@
   .banner{border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.55;margin-bottom:12px}
   .banner.warn{background:#2b230d;border:1px solid #5c4a14;color:#ecd9a0}
   .banner.err{background:#2b0f12;border:1px solid #5c1c22;color:#f0b6bc}
+  .banner.ok{background:#0e2416;border:1px solid #1c5c32;color:#b6f0c6}
   .banner code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:4px;font-size:11.5px}
   .bullet{display:inline-grid;place-items:center;min-width:34px;height:26px;padding:0 7px;border-radius:6px;
     color:#fff;font-weight:900;font-size:14px;font-variation-settings:'wdth' 80;flex:none}
@@ -120,7 +121,9 @@
   .suggest input{padding-right:36px}
   .clear-x{position:absolute;right:9px;top:19px;transform:translateY(-50%);width:22px;height:22px;border-radius:50%;
     background:var(--line);color:var(--text);border:0;cursor:pointer;font-size:11px;line-height:1;display:none;z-index:5}
-  .chev{color:var(--muted);font-size:12px;margin-left:8px;transition:transform .15s;display:inline-block}
+  .chev{color:var(--muted);font-size:13px;margin-left:4px;transition:transform .15s;display:inline-block;
+    padding:6px 8px;cursor:pointer;border-radius:6px}
+  .chev:hover{background:var(--panel-2)}
   .opt.open .chev{transform:rotate(180deg)}
   .legs{display:none;margin-top:10px;border-top:1px solid var(--line);padding-top:12px}
   .opt.open .legs{display:block}
@@ -130,11 +133,22 @@
   .leg-body{flex:1;font-size:13.5px;line-height:1.5}
   .leg-dir{color:var(--muted);font-size:12.5px;margin-top:2px}
   .leg-dir b{color:var(--text)}
-  .leg-stops{margin-top:5px}
+  .leg-toggle{background:none;border:0;color:var(--muted);font-family:inherit;font-size:12.5px;font-weight:700;
+    cursor:pointer;padding:4px 0;text-align:left}
+  .leg-toggle:hover{color:var(--text)}
+  .leg-toggle .tri{display:inline-block;transition:transform .15s;font-size:10px}
+  .leg.open .leg-toggle .tri{transform:rotate(90deg)}
+  .leg-stops{margin-top:3px;display:none}
+  .leg.open .leg-stops{display:block}
   .leg-stops button{display:block;width:100%;background:none;border:0;color:var(--muted);font-family:inherit;
     font-size:12.5px;cursor:pointer;padding:2.5px 0;text-align:left}
   .leg-stops button:hover{color:var(--text)}
   .leg-stops button.major{color:var(--text);font-weight:700;font-size:13.5px}
+  .leg-stops button.cur{color:var(--ok);font-weight:700}
+  .leg-stops button.cur::before{content:'➤ '}
+  .fav-set{margin-left:auto;display:flex;gap:8px;flex:none}
+  .fav-set i{font-style:normal;opacity:.4;cursor:pointer;padding:2px 3px}
+  .fav-set i:hover{opacity:1}
   #map.full{height:72vh}
   .footer-note{font-size:11px;color:#5a6875;text-align:center;line-height:1.5;
     padding:4px 20px calc(14px + env(safe-area-inset-bottom,0px))}
@@ -269,6 +283,7 @@ const I18N = {
       nextStop:'Next stop (approx.)',offRoute:m=>`~${m} m from route`,nearby:'Nearby:',
       netErr:'Could not reach the Wiener Linien API. Check your PROXY_URL / connection.',
       stopsN:n=>n===1?'1 stop':`${n} stops`,
+      savedHome:'Saved as Home',savedWork:'Saved as Work',
       myLoc:'My location'},
   de:{tagline:'Öffi-Begleiter für Wien',tabDep:'Abfahrten',tabRoute:'Route',
       searchStop:'Haltestelle suchen…',fromPh:'Von (Haltestelle oder 📍)',toPh:'Nach',
@@ -283,6 +298,7 @@ const I18N = {
       nextStop:'Nächster Halt (ca.)',offRoute:m=>`~${m} m von der Route entfernt`,nearby:'In der Nähe:',
       netErr:'Wiener-Linien-API nicht erreichbar. PROXY_URL / Verbindung prüfen.',
       stopsN:n=>n===1?'1 Station':`${n} Stationen`,
+      savedHome:'Als Zuhause gespeichert',savedWork:'Als Arbeit gespeichert',
       myLoc:'Mein Standort'}
 };
 let lang='en';
@@ -306,7 +322,8 @@ function dist(a,b){
   const s=Math.sin(dLat/2)**2+Math.cos(a[0]*Math.PI/180)*Math.cos(b[0]*Math.PI/180)*Math.sin(dLon/2)**2;
   return 2*R*Math.asin(Math.sqrt(s));
 }
-function showErr(msg){const b=$('errBanner');b.textContent=msg;b.style.display='block';clearTimeout(b._t);b._t=setTimeout(()=>b.style.display='none',8000);}
+function showErr(msg){const b=$('errBanner');b.className='banner err';b.textContent=msg;b.style.display='block';clearTimeout(b._t);b._t=setTimeout(()=>b.style.display='none',8000);}
+function showMsg(msg){const b=$('errBanner');b.className='banner ok';b.textContent=msg;b.style.display='block';clearTimeout(b._t);b._t=setTimeout(()=>{b.style.display='none';b.className='banner err';},2500);}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
 // Line styling
@@ -375,6 +392,7 @@ function startGeo(){
     myPos=[p.coords.latitude,p.coords.longitude];
     meMarker.setLatLng(myPos).addTo(map);
     renderNearby();
+    updateStopHighlight();
     if(journeyOn) journeyTick();
   },()=>{},{enableHighAccuracy:true,maximumAge:5000,timeout:15000});
 }
@@ -459,27 +477,63 @@ function renderBoard(){
 }
 
 /* ========================= SEARCH UIs ========================= */
+/* Favorites (Home/Work) + frequency tracking — silently skipped if storage unavailable */
+function favs(){try{return JSON.parse(localStorage.getItem('wg_fav')||'{}')}catch(e){return{}}}
+function setFav(kind,st){try{const f=favs();f[kind]={diva:st.diva,name:st.name};localStorage.setItem('wg_fav',JSON.stringify(f));}catch(e){}}
+function bumpFreq(diva){try{const q=JSON.parse(localStorage.getItem('wg_freq')||'{}');q[diva]=(q[diva]||0)+1;localStorage.setItem('wg_freq',JSON.stringify(q));}catch(e){}}
+function topFreq(n){try{
+  const q=JSON.parse(localStorage.getItem('wg_freq')||'{}');
+  return Object.entries(q).sort((a,b)=>b[1]-a[1]).map(([d])=>STATIONS.find(s=>s.diva===d)).filter(Boolean).slice(0,n);
+}catch(e){return[]}}
+
 function wireSearch(inputId,listId,onPick,allowMe){
   const inp=$(inputId),list=$(listId);
+  const favIcons=s=>`<span class="fav-set"><i data-k="home" data-d="${s.diva}" title="Set as Home">🏠</i><i data-k="work" data-d="${s.diva}" title="Set as Work">💼</i></span>`;
   function render(q){
+    const f=favs();
     let html='';
-    if(allowMe) html+=`<button data-me="1">📍 ${t('myLoc')}</button>`;
-    // typed query -> name matches; empty field -> nearby stations
-    const hits=(q&&q.length>=2)
-      ? searchStations(q)
-      : (myPos&&STATIONS.length
-          ? [...STATIONS].sort((a,b)=>dist(myPos,[a.lat,a.lon])-dist(myPos,[b.lat,b.lon])).slice(0,5)
-          : []);
-    html+=hits.map(s=>`<button data-diva="${s.diva}">${esc(s.name)}<small>${s.diva}</small></button>`).join('');
+    if(q&&q.length>=2){
+      // typed: name matches, each with set-Home/Work icons
+      html+=searchStations(q).map(s=>`<button data-diva="${s.diva}">${esc(s.name)}${favIcons(s)}</button>`).join('');
+    }else{
+      // empty: my location, Home, Work, frequent, then nearest
+      if(allowMe) html+=`<button data-me="1">📍 ${t('myLoc')}</button>`;
+      const used=new Set();
+      if(f.home){used.add(f.home.diva);html+=`<button data-diva="${f.home.diva}">🏠 ${esc(f.home.name)}</button>`;}
+      if(f.work){used.add(f.work.diva);html+=`<button data-diva="${f.work.diva}">💼 ${esc(f.work.name)}</button>`;}
+      topFreq(6).forEach(s=>{
+        if(used.size>=6||used.has(s.diva)) return;
+        used.add(s.diva);
+        html+=`<button data-diva="${s.diva}">★ ${esc(s.name)}</button>`;
+      });
+      if(myPos&&STATIONS.length){
+        [...STATIONS].sort((a,b)=>dist(myPos,[a.lat,a.lon])-dist(myPos,[b.lat,b.lon])).slice(0,8).forEach(s=>{
+          if(used.size>=7||used.has(s.diva)) return;
+          used.add(s.diva);
+          const m=Math.round(dist(myPos,[s.lat,s.lon])*1000);
+          html+=`<button data-diva="${s.diva}">${esc(s.name)}<small>${m} m</small></button>`;
+        });
+      }
+    }
     if(!html){list.style.display='none';return;}
     list.innerHTML=html; list.style.display='block';
-    list.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
+    list.querySelectorAll('.fav-set i').forEach(ic=>ic.addEventListener('click',e=>{
+      e.stopPropagation();
+      const s=STATIONS.find(x=>x.diva===ic.dataset.d);
+      if(!s) return;
+      setFav(ic.dataset.k,s);
+      showMsg((ic.dataset.k==='home'?t('savedHome'):t('savedWork'))+': '+s.name);
+      list.style.display='none';
+    }));
+    list.querySelectorAll('button[data-me],button[data-diva]').forEach(b=>b.addEventListener('click',()=>{
       if(b.dataset.me){
         if(!myPos){ showErr(t('geoDenied')); startGeo(); }
         inp.value='📍 '+t('myLoc'); inp.dataset.me='1'; inp.dataset.diva='';
       }else{
         const s=STATIONS.find(x=>x.diva===b.dataset.diva);
+        if(!s) return;
         inp.value=s.name; inp.dataset.diva=s.diva; inp.dataset.me='';
+        bumpFreq(s.diva);
       }
       list.style.display='none'; syncClears();
       onPick&&onPick();
@@ -574,8 +628,14 @@ function normalizeTrips(j){
     if(!Array.isArray(legs)) legs=[legs];
     const L=legs.map(l=>{
       const modeName=(l.mode?.name||'').trim();
-      const num=(l.mode?.number||'').trim()||modeName.split(/\s+/).pop();
-      const walk=/fu(ß|ss)weg|footpath|walk|gehweg/i.test(modeName)||l.mode?.type===99||l.mode?.type===100;
+      // line number: number field, then symbol, then name minus the product word
+      const num=(l.mode?.number||l.mode?.symbol||'').trim()
+        ||modeName.replace(/^(autobus|bus|stra(ß|ss)enbahn|tram|u-bahn|metro|s-bahn|badner bahn)\s*/i,'').split(/\s+/).pop()||'';
+      // walk detection: EFA sends type/code as strings in some responses
+      const mt=parseInt(l.mode?.type,10),mc=parseInt(l.mode?.code,10);
+      const walk=/fu(ß|ss)weg|footpath|walk|gehweg/i.test(modeName)
+        ||mt===99||mt===100||mc===-1
+        ||(!modeName&&!(l.mode?.number||l.mode?.symbol)); // no mode info at all = footpath
       const p0=(l.points||[])[0]||{},p1=(l.points||[]).slice(-1)[0]||{};
       const pts=parsePath(l.path)|| [coordOf(p0),coordOf(p1)].filter(Boolean);
       // intermediate stop sequence (EFA "stopSeq"), tolerant of array / object shapes
@@ -651,17 +711,19 @@ function renderOptions(){
         const mids=l.stops.slice(1,-1);
         const startC=coordAttr((l.stops[0]&&l.stops[0].coord)||l.pts[0]);
         const endC=coordAttr((l.stops.length&&l.stops[l.stops.length-1].coord)||l.pts[l.pts.length-1]);
+        const stopList=`
+            <button class="major" data-name="${esc(l.from)}" data-c="${startC}">${esc(l.from)}${l.depT?' · '+esc(l.depT):''}</button>
+            ${mids.map(s=>`<button data-name="${esc(s.name)}" data-c="${coordAttr(s.coord)}">&nbsp;&nbsp;·&nbsp;${esc(s.name)}${s.time?' · '+esc(s.time):''}</button>`).join('')}
+            <button class="major" data-name="${esc(l.to)}" data-c="${endC}">${esc(l.to)}${l.arrT?' · '+esc(l.arrT):''}</button>`;
         body=`${bullet(l.line,true)} <span class="leg-dir">${t('towards')} <b>${esc(l.dest||l.to)}</b></span>
-          <div class="leg-stops">
-            <button class="major" data-c="${startC}">${esc(l.from)}${l.depT?' · '+esc(l.depT):''}</button>
-            ${mids.map(s=>`<button data-c="${coordAttr(s.coord)}">&nbsp;&nbsp;·&nbsp;${esc(s.name)}${s.time?' · '+esc(s.time):''}</button>`).join('')}
-            <button class="major" data-c="${endC}">${esc(l.to)}${l.arrT?' · '+esc(l.arrT):''}</button>
-          </div>
-          <div class="leg-dir">${l.stops.length>1?t('stopsN')(l.stops.length-1):''}${l.legDur?` · ${l.legDur} ${t('min')}`:''}</div>`;
+          <div class="leg-dir">${esc(l.from)}${l.depT?' '+esc(l.depT):''} → ${esc(l.to)}${l.arrT?' '+esc(l.arrT):''}${l.legDur?` · ${l.legDur} ${t('min')}`:''}</div>
+          ${l.stops.length>2
+            ?`<button class="leg-toggle"><span class="tri">▸</span> ${t('stopsN')(l.stops.length-1)}</button><div class="leg-stops">${stopList}</div>`
+            :`<div class="leg-stops" style="display:block">${stopList}</div>`}`;
       }
       return `<div class="leg"><div class="leg-rail" style="background:${col}"></div><div class="leg-body">${body}</div></div>`;
     }).join('');
-    return `<div class="card opt ${i===selIdx?'sel open':''}" data-i="${i}">
+    return `<div class="card opt ${i===selIdx?'sel':''}" data-i="${i}">
       <div class="opt-top">
         <span class="opt-time">${esc(first.depT)} → ${esc(last.arrT)}
           ${i===0?`<span class="badge-best">${t('best')}</span>`:''}</span>
@@ -673,8 +735,11 @@ function renderOptions(){
     </div>`;
   }).join('');
   el.querySelectorAll('.opt').forEach(card=>card.addEventListener('click',e=>{
+    if(e.target.closest('.chev')){ card.classList.toggle('open'); return; } // details only via chevron
+    const lt=e.target.closest('.leg-toggle');
+    if(lt){ lt.closest('.leg').classList.toggle('open'); return; }         // nested stop reveal
     const stopBtn=e.target.closest('.leg-stops button');
-    if(stopBtn){ // tap a stop -> pan the map to it
+    if(stopBtn){                                                            // tap a stop -> pan the map
       const c=stopBtn.dataset.c;
       if(c){
         const [la,lo]=c.split(',').map(Number);
@@ -684,9 +749,9 @@ function renderOptions(){
       return;
     }
     const i=+card.dataset.i;
-    if(i===selIdx) card.classList.toggle('open'); // tap selected card again -> collapse/expand
-    else selectOption(i);
+    if(i!==selIdx) selectOption(i);
   }));
+  updateStopHighlight();
 }
 
 /* ========================= MAP ========================= */
@@ -772,6 +837,16 @@ function stopJourney(){
   $('journey').classList.remove('on');
   $('goBtn').textContent=t('startJourney');
   $('prog').style.width='0%';
+}
+/* Highlight the current/next station in the expanded stop lists based on GPS */
+function updateStopHighlight(){
+  if(!myPos||!routePts.length) return;
+  let bi=0,bd=1e9;
+  routePts.forEach((r,i)=>{const d=dist(myPos,r.pt);if(d<bd){bd=d;bi=i;}});
+  if(bd>1.5) return; // more than ~1.5 km off the route: not on this trip yet
+  const nx=routePts[bi].next;
+  document.querySelectorAll('.opt .leg-stops button').forEach(b=>
+    b.classList.toggle('cur',b.dataset.name===nx));
 }
 
 /* ========================= PULL-TO-REFRESH =========================
