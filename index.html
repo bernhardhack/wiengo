@@ -270,7 +270,11 @@ const URLS = {
   stops:   WL + '/ogd_realtime/doku/ogd/wienerlinien-ogd-haltepunkte.csv',
   monitor: diva => WL + '/ogd_realtime/monitor?diva=' + diva +
            '&activateTrafficInfo=stoerungkurz&activateTrafficInfo=stoerunglang',
-  route:   q => WL + '/ogd_routing/XML_TRIP_REQUEST2?' + q
+  route:   q => WL + '/ogd_routing/XML_TRIP_REQUEST2?' + q,
+  stopfinder: q => WL + '/ogd_routing/XML_STOPFINDER_REQUEST?' + new URLSearchParams({
+    outputFormat:'JSON', type_sf:'any', name_sf:q,
+    locationServerActive:'1', coordOutputFormat:'WGS84[DD.ddddd]'
+  })
 };
 const prox = url => PROXY_URL ? PROXY_URL.replace(/\/$/,'') + '/?u=' + encodeURIComponent(url) : url;
 
@@ -292,6 +296,7 @@ const I18N = {
       savedHome:'Saved as Home',savedWork:'Saved as Work',
       nearbyTitle:'Nearby departures',walkLbl:(m,mi)=>`${m} m · ~${mi} min walk`,
       leaveNow:'🏃 go now',leaveIn:n=>`leave in ${n} min`,
+      accHint:a=>`Position only accurate to ~${a} m (typical for laptops) — search an address above to recenter.`,
       myLoc:'My location'},
   de:{tagline:'Öffi-Begleiter für Wien',tabDep:'Abfahrten',tabRoute:'Route',
       searchStop:'Haltestelle suchen…',fromPh:'Von (Haltestelle oder 📍)',toPh:'Nach',
@@ -309,6 +314,7 @@ const I18N = {
       savedHome:'Als Zuhause gespeichert',savedWork:'Als Arbeit gespeichert',
       nearbyTitle:'Abfahrten in der Nähe',walkLbl:(m,mi)=>`${m} m · ~${mi} Min zu Fuß`,
       leaveNow:'🏃 jetzt los',leaveIn:n=>`in ${n} Min losgehen`,
+      accHint:a=>`Standort nur auf ~${a} m genau (typisch am Laptop) — Adresse oben suchen zum Neuzentrieren.`,
       myLoc:'Mein Standort'}
 };
 let lang='en';
@@ -387,19 +393,27 @@ async function loadStops(){
   }
 }
 function stopsReady(){ $('stopCount').textContent=t('stopsReady')(STATIONS.length); renderNearby(); maybeAutoNearby(); }
+/* Normalized matching: "lueger platz" finds "Dr.-Karl-Lueger-Platz", "strasse" finds "Straße" */
+function norm(s){
+  return s.toLowerCase().replace(/ß/g,'ss')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^a-z0-9]+/g,' ').trim();
+}
 function searchStations(q){
-  q=q.toLowerCase();
-  return STATIONS.filter(s=>s.name.toLowerCase().includes(q))
-    .sort((a,b)=>a.name.toLowerCase().indexOf(q)-b.name.toLowerCase().indexOf(q)||a.name.length-b.name.length)
+  const toks=norm(q).split(' ').filter(Boolean);
+  if(!toks.length) return [];
+  return STATIONS.filter(s=>{const n=norm(s.name);return toks.every(t=>n.includes(t));})
+    .sort((a,b)=>norm(a.name).indexOf(toks[0])-norm(b.name).indexOf(toks[0])||a.name.length-b.name.length)
     .slice(0,7);
 }
 
 /* ========================= GEOLOCATION ========================= */
-let myPos=null,watchId=null;
+let myPos=null,myAcc=null,watchId=null;
 function startGeo(){
   if(!('geolocation' in navigator)) return;
   watchId=navigator.geolocation.watchPosition(p=>{
     myPos=[p.coords.latitude,p.coords.longitude];
+    myAcc=p.coords.accuracy||myAcc;
     meMarker.setLatLng(myPos).addTo(map);
     renderNearby();
     maybeAutoNearby();
@@ -419,15 +433,24 @@ function renderNearby(){
 function useNearest(){
   if(!myPos){ showErr(t('geoDenied')); startGeo(); return; }
   if(!STATIONS.length) return;
-  depMode='nearby'; currentStation=null; depData=null;
+  boardPos=null; boardLabel=null;
+  depMode='nearby'; currentStation=null; depData=null; nearbyList=[];
   $('stopSearch').value=''; syncClears();
+  fetchNearby();
+  clearInterval(depTimer);
+  depTimer=setInterval(fetchNearby,30000);
+}
+function setBoardCenter(coord,label){
+  boardPos=coord; boardLabel=label;
+  depMode='nearby'; currentStation=null; depData=null; nearbyList=[];
   fetchNearby();
   clearInterval(depTimer);
   depTimer=setInterval(fetchNearby,30000);
 }
 
 /* ========================= DEPARTURES (real-time monitor) ========================= */
-let currentStation=null,depData=null,depTimer=null,depMode='single',nearbyList=[],autoNearby=false;
+let currentStation=null,depData=null,depTimer=null,depMode='single',nearbyList=[],autoNearby=false,
+    boardPos=null,boardLabel=null;
 function pickStation(diva){
   depMode='single'; nearbyList=[];
   currentStation=STATIONS.find(s=>s.diva===diva);
@@ -504,8 +527,9 @@ function renderBoard(){
 }
 /* ---- nearby mode: all stations in walking range, at a glance ---- */
 async function fetchNearby(){
-  if(!myPos||!STATIONS.length) return;
-  const cand=[...STATIONS].map(s=>({s,d:dist(myPos,[s.lat,s.lon])}))
+  const center=boardPos||myPos;
+  if(!center||!STATIONS.length) return;
+  const cand=[...STATIONS].map(s=>({s,d:dist(center,[s.lat,s.lon])}))
     .sort((a,b)=>a.d-b.d).filter(x=>x.d<=0.75).slice(0,5);   // up to 5 stations within 750 m
   if(!cand.length){ $('depBoard').innerHTML=`<div class="empty">–</div>`; return; }
   if(!nearbyList.length) $('depBoard').innerHTML=`<div class="empty"><span class="spin"></span>${t('loadingDeps')}</div>`;
@@ -521,8 +545,10 @@ async function fetchNearby(){
   renderNearbyBoard();
 }
 function renderNearbyBoard(){
-  let html=`<div class="stop-head"><h2>${t('nearbyTitle')}</h2>
+  let html=`<div class="stop-head"><h2>${boardLabel?esc(boardLabel):t('nearbyTitle')}</h2>
     <span class="live-tag"><span class="live-dot"></span>Live</span></div>`;
+  if(!boardPos&&myAcc&&myAcc>800)
+    html+=`<div class="banner warn">${t('accHint')(Math.round(myAcc))}</div>`;
   nearbyList.forEach(e=>{
     html+=`<div class="near-head"><b>${esc(e.station.name)}</b>
       <span>${t('walkLbl')(e.distM,e.walkMin)}</span></div>`;
@@ -550,15 +576,41 @@ function topFreq(n){try{
   return Object.entries(q).sort((a,b)=>b[1]-a[1]).map(([d])=>STATIONS.find(s=>s.diva===d)).filter(Boolean).slice(0,n);
 }catch(e){return[]}}
 
+/* EFA stopfinder: addresses, POIs, and non-WL stations (e.g. S-Bahn) */
+let sfSeq=0;
+async function efaStopfinder(q){
+  const my=++sfSeq;
+  try{
+    const r=await fetch(prox(URLS.stopfinder(q)));
+    if(!r.ok) return null;
+    const j=await r.json();
+    if(my!==sfSeq) return null; // a newer query superseded this one
+    let pts=(j&&j.stopFinder&&j.stopFinder.points)||[];
+    if(!Array.isArray(pts)) pts=[].concat(pts.point||pts||[]);
+    return pts.map(p=>({
+      name:(p.name||p.object||'').trim(),
+      kind:(p.anyType||p.type||'').toLowerCase(),
+      coord:coordOf(p)
+    })).filter(p=>p.name&&p.coord).slice(0,5);
+  }catch(e){ return null; }
+}
+
 function wireSearch(inputId,listId,onPick,allowMe){
   const inp=$(inputId),list=$(listId);
   const favIcons=s=>`<span class="fav-set"><i data-k="home" data-d="${s.diva}" title="Set as Home">🏠</i><i data-k="work" data-d="${s.diva}" title="Set as Work">💼</i></span>`;
-  function render(q){
+  function render(q,extra){
     const f=favs();
     let html='';
     if(q&&q.length>=2){
-      // typed: name matches, each with set-Home/Work icons
-      html+=searchStations(q).map(s=>`<button data-diva="${s.diva}">${esc(s.name)}${favIcons(s)}</button>`).join('');
+      // typed: local station matches with set-Home/Work icons
+      const hits=searchStations(q);
+      const localNames=new Set(hits.map(s=>norm(s.name)));
+      html+=hits.map(s=>`<button data-diva="${s.diva}">${esc(s.name)}${favIcons(s)}</button>`).join('');
+      // plus stopfinder results: addresses, POIs, non-WL stations (skip WL duplicates)
+      (extra||[]).forEach(p=>{
+        if(p.kind==='stop'&&localNames.has(norm(p.name))) return;
+        html+=`<button data-coord="${p.coord[0].toFixed(6)},${p.coord[1].toFixed(6)}">📌 ${esc(p.name)}</button>`;
+      });
     }else{
       // empty: my location, Home, Work, frequent, then nearest
       if(allowMe) html+=`<button data-me="1">📍 ${t('myLoc')}</button>`;
@@ -589,14 +641,24 @@ function wireSearch(inputId,listId,onPick,allowMe){
       showMsg((ic.dataset.k==='home'?t('savedHome'):t('savedWork'))+': '+s.name);
       list.style.display='none';
     }));
-    list.querySelectorAll('button[data-me],button[data-diva]').forEach(b=>b.addEventListener('click',()=>{
+    list.querySelectorAll('button[data-me],button[data-diva],button[data-coord]').forEach(b=>b.addEventListener('click',()=>{
       if(b.dataset.me){
         if(!myPos){ showErr(t('geoDenied')); startGeo(); }
-        inp.value='📍 '+t('myLoc'); inp.dataset.me='1'; inp.dataset.diva='';
+        inp.value='📍 '+t('myLoc'); inp.dataset.me='1'; inp.dataset.diva=''; inp.dataset.coord='';
+      }else if(b.dataset.coord){
+        const name=b.textContent.replace(/^📌\s*/,'').trim();
+        if(inputId==='stopSearch'){        // departures: recenter nearby board on the address
+          const [la,lo]=b.dataset.coord.split(',').map(Number);
+          inp.value=name;
+          list.style.display='none'; syncClears();
+          setBoardCenter([la,lo],name);
+          return;
+        }
+        inp.value=name; inp.dataset.coord=b.dataset.coord; inp.dataset.diva=''; inp.dataset.me='';
       }else{
         const s=STATIONS.find(x=>x.diva===b.dataset.diva);
         if(!s) return;
-        inp.value=s.name; inp.dataset.diva=s.diva; inp.dataset.me='';
+        inp.value=s.name; inp.dataset.diva=s.diva; inp.dataset.me=''; inp.dataset.coord='';
         bumpFreq(s.diva);
       }
       list.style.display='none'; syncClears();
@@ -604,8 +666,12 @@ function wireSearch(inputId,listId,onPick,allowMe){
     }));
   }
   inp.addEventListener('input',()=>{
-    inp.dataset.diva=''; inp.dataset.me=''; syncClears();
-    render(inp.value.trim());
+    inp.dataset.diva=''; inp.dataset.me=''; inp.dataset.coord=''; syncClears();
+    const q=inp.value.trim();
+    render(q);
+    if(q.length>=3) efaStopfinder(q).then(pts=>{
+      if(pts&&pts.length&&inp.value.trim()===q&&document.activeElement===inp) render(q,pts);
+    });
   });
   inp.addEventListener('focus',()=>render(inp.value.trim()));
 }
@@ -637,6 +703,7 @@ function swapFromTo(){
   [f.value,to.value]=[to.value,f.value];
   [f.dataset.diva,to.dataset.diva]=[to.dataset.diva,f.dataset.diva];
   [f.dataset.me,to.dataset.me]=[to.dataset.me,f.dataset.me];
+  [f.dataset.coord,to.dataset.coord]=[to.dataset.coord,f.dataset.coord];
   syncClears();
 }
 
@@ -650,15 +717,20 @@ function efaParams(){
     itdTripDateTimeDepArr:'dep',calcNumberOfTrips:'3',
     useRealtime:'1',locationServerActive:'1',ptOptionsActive:'1'
   });
+  const coordParam=c=>{const [la,lo]=c.split(',').map(Number);return lo.toFixed(6)+':'+la.toFixed(6)+':WGS84';};
   if(f.dataset.me&&myPos){
     p.set('type_origin','coord');
     p.set('name_origin',myPos[1].toFixed(6)+':'+myPos[0].toFixed(6)+':WGS84');
+  }else if(f.dataset.coord){
+    p.set('type_origin','coord'); p.set('name_origin',coordParam(f.dataset.coord));
   }else if(f.dataset.diva){
     p.set('type_origin','stop'); p.set('name_origin',f.dataset.diva);
   }else return null;
   if(to.dataset.me&&myPos){
     p.set('type_destination','coord');
     p.set('name_destination',myPos[1].toFixed(6)+':'+myPos[0].toFixed(6)+':WGS84');
+  }else if(to.dataset.coord){
+    p.set('type_destination','coord'); p.set('name_destination',coordParam(to.dataset.coord));
   }else if(to.dataset.diva){
     p.set('type_destination','stop'); p.set('name_destination',to.dataset.diva);
   }else return null;
