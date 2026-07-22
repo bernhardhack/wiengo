@@ -1,60 +1,75 @@
-# WienGo — Live Setup
+# WienGo
 
-Two files, three steps.
+Live Vienna public transport companion: real-time departures, route planning,
+and on-map journey tracking. Built on Wiener Linien open data (no API key).
 
-## 1. Deploy the proxy (~2 min, free)
+## Architecture
 
-Browsers can't call `wienerlinien.at` directly (no CORS headers), so the app
-routes everything through a tiny proxy you control.
+| Piece | Where it runs | File |
+|---|---|---|
+| App (single HTML file) | GitHub Pages | `index.html` |
+| CORS proxy | Cloudflare Workers | `proxy-worker.js` → deployed at `https://wiengo.bernhard-hack.workers.dev` |
 
-1. Go to [dash.cloudflare.com](https://dash.cloudflare.com) → **Workers & Pages → Create → Worker**
-2. Paste the contents of `proxy-worker.js`, hit **Deploy**
-3. Copy your worker URL, e.g. `https://wiengo-proxy.you.workers.dev`
+The proxy exists because wienerlinien.at sends no CORS headers, so browsers
+can't call it directly. It only forwards to `wienerlinien.at` (host
+allowlist), caches the static stop CSV for a day, and adds a 10-second cache
+on realtime calls to keep request rates polite.
 
-The proxy only forwards to `wienerlinien.at` (host allowlist), caches the
-static stop CSV for a day, and adds a 10-second cache on realtime calls to
-stay well within polite request rates.
+The proxy URL is baked into `index.html` (`PROXY_URL` constant at the top of
+the script) — no configuration needed on deploy.
 
-## 2. Configure the app
+## Updating the app
 
-Open `wiengo-live.html` and set the constant at the top of the `<script>`:
+1. Replace `index.html` with the new version
+   (repo → **Add file → Upload files**, or `git add / commit / push`).
+2. GitHub Pages redeploys automatically within a minute.
+3. Hard-refresh on the phone — browsers cache aggressively.
 
-```js
-const PROXY_URL = 'https://wiengo-proxy.you.workers.dev';
-```
+If the proxy ever needs changing: edit the worker in the Cloudflare dashboard
+(Workers & Pages → wiengo → Edit code), paste the new `proxy-worker.js`,
+Deploy. The app only needs touching if the worker URL changes.
 
-## 3. Run it
+## Features
 
-- **On your phone / for GPS:** host the file anywhere with HTTPS
-  (GitHub Pages, Netlify drop, Cloudflare Pages — drag & drop is enough).
-  Geolocation requires a secure context, so `https://` is what makes the
-  "follow along route" mode work on mobile.
-- **Quick desktop test:** just open the file in a browser. Everything except
-  geolocation may work from `file://` depending on the browser.
+**Departures** — search any stop (or 📍 nearest / nearby chips), live
+countdowns refreshed every 30 s, realtime vs. scheduled indicator, second
+departure per line, active disruption notices.
 
-## What it uses
+**Route planning** — up to 3 realtime options from the Wiener Linien EFA
+endpoint. From/To both accept 📍 My location; empty fields suggest the five
+nearest stations on focus; ✕ clears a field. Each option card shows times,
+duration, changes, and walking distances; tap the selected card to expand
+per-leg details: line, **direction of travel** ("towards …"), boarding /
+intermediate / alighting stops with times, stop count.
+
+**Map** — route drawn with real geometry in official line colors, walking
+legs dashed, intermediate stations as tappable dots, tap any stop name in
+the details to pan to it, ⤢ expands the map for navigation. Journey mode
+follows your GPS dot along the route with progress bar, next-station
+readout, and an off-route distance warning.
+
+## Data sources
 
 | Feature | Source |
 |---|---|
-| Stop directory | `wienerlinien-ogd-haltepunkte.csv` (open data, grouped by DIVA station ID, cached 7 days in the browser) |
-| Live departures | `ogd_realtime/monitor?diva=…` — real countdowns, realtime vs. scheduled flag, disruption notices |
-| Routing | `ogd_routing/XML_TRIP_REQUEST2` (EFA, JSON output) — up to 3 trips with realtime, incl. walking legs and geometry |
+| Stop directory | `wienerlinien-ogd-haltepunkte.csv` (grouped by DIVA station ID, cached 7 days in the browser) |
+| Live departures | `ogd_realtime/monitor?diva=…` |
+| Routing | `ogd_routing/XML_TRIP_REQUEST2` (EFA, JSON output, realtime enabled) |
 | Map | Leaflet + CARTO dark tiles |
-| Your position | `navigator.geolocation.watchPosition` — nearest-stop pick, nearby chips, live dot, progress + next stop along the selected route |
+| Position | `navigator.geolocation.watchPosition` (needs HTTPS — GitHub Pages provides it) |
 
-No API key needed for any of it; Wiener Linien dropped the key requirement.
-Data license: Stadt Wien / Wiener Linien, CC BY 4.0 (data.gv.at).
+License: Stadt Wien / Wiener Linien open data, CC BY 4.0 (data.gv.at).
 
 ## Troubleshooting
 
-- **Yellow "Setup needed" banner** → `PROXY_URL` is still empty.
-- **"Could not reach the Wiener Linien API"** → open
-  `{PROXY_URL}/?u=` + URL-encoded
+- **"Could not reach the Wiener Linien API"** → test the chain directly:
+  `https://wiengo.bernhard-hack.workers.dev/?u=` + URL-encoded
   `https://www.wienerlinien.at/ogd_realtime/monitor?diva=60200657`
-  in a browser tab. If that returns JSON, the proxy is fine and the issue is
-  in the page (check the console). If not, redeploy the worker.
-- **No routes found** → the EFA endpoint occasionally returns oddly shaped
-  JSON; the parser is deliberately tolerant, but if a specific origin/
-  destination pair reliably fails, tell me the pair and I'll adapt the parser.
-- **GPS not working on phone** → make sure you're on `https://` and location
-  permission is granted for the site.
+  JSON back = proxy fine, check the browser console. Error back = redeploy
+  the worker.
+- **Route expands but no intermediate stop list** → the EFA response omitted
+  `stopSeq`; capture the raw JSON from the URL above (routing variant) for a
+  parser fix.
+- **GPS not working** → HTTPS + location permission granted for the site.
+- **Old version still showing after update** → hard-refresh; Pages deploys
+  can also take a minute or two.
