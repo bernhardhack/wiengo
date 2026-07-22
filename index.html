@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>WienGo — Vienna Transit Companion (Live)</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -21,7 +21,8 @@
     -webkit-font-smoothing:antialiased;display:flex;flex-direction:column;
     max-width:520px;margin:0 auto;border-left:1px solid var(--line);border-right:1px solid var(--line);
   }
-  header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 10px}
+  header{display:flex;align-items:center;justify-content:space-between;
+    padding:calc(14px + env(safe-area-inset-top,0px)) 16px 10px}
   .brand{display:flex;align-items:center;gap:10px}
   .brand-mark{width:34px;height:34px;border-radius:8px;background:var(--wl-red);display:grid;place-items:center;
     font-weight:900;font-size:19px;color:#fff;font-variation-settings:'wdth' 75;letter-spacing:-.5px}
@@ -135,7 +136,8 @@
   .leg-stops button:hover{color:var(--text)}
   .leg-stops button.major{color:var(--text);font-weight:700;font-size:13.5px}
   #map.full{height:72vh}
-  .footer-note{font-size:11px;color:#5a6875;text-align:center;padding:4px 20px 14px;line-height:1.5}
+  .footer-note{font-size:11px;color:#5a6875;text-align:center;line-height:1.5;
+    padding:4px 20px calc(14px + env(safe-area-inset-bottom,0px))}
 </style>
 </head>
 <body>
@@ -160,6 +162,9 @@
 </nav>
 
 <main>
+  <div id="ptr" style="height:0;overflow:hidden;transition:height .2s;text-align:center;flex:none">
+    <span class="spin" style="margin-top:10px"></span>
+  </div>
   <div id="proxyBanner" class="banner warn" style="display:none;margin:0 0 12px">
     <b>Setup needed:</b> set <code>PROXY_URL</code> at the top of the script to your deployed
     proxy (see README / proxy-worker.js). Browsers block direct calls to wienerlinien.at (CORS).
@@ -529,13 +534,13 @@ function efaParams(){
   });
   if(f.dataset.me&&myPos){
     p.set('type_origin','coord');
-    p.set('name_origin',myPos[1].toFixed(6)+':'+myPos[0].toFixed(6)+':WGS84[DD.ddddd]');
+    p.set('name_origin',myPos[1].toFixed(6)+':'+myPos[0].toFixed(6)+':WGS84');
   }else if(f.dataset.diva){
     p.set('type_origin','stop'); p.set('name_origin',f.dataset.diva);
   }else return null;
   if(to.dataset.me&&myPos){
     p.set('type_destination','coord');
-    p.set('name_destination',myPos[1].toFixed(6)+':'+myPos[0].toFixed(6)+':WGS84[DD.ddddd]');
+    p.set('name_destination',myPos[1].toFixed(6)+':'+myPos[0].toFixed(6)+':WGS84');
   }else if(to.dataset.diva){
     p.set('type_destination','stop'); p.set('name_destination',to.dataset.diva);
   }else return null;
@@ -767,6 +772,35 @@ function stopJourney(){
   $('journey').classList.remove('on');
   $('goBtn').textContent=t('startJourney');
   $('prog').style.width='0%';
+}
+
+/* ========================= PULL-TO-REFRESH =========================
+   Standalone/home-screen web apps get no native pull-to-refresh,
+   so we implement a light one on the scroll container. */
+const mainEl=document.querySelector('main');
+let ptrStartY=null,ptrDelta=0;
+mainEl.addEventListener('touchstart',e=>{
+  ptrStartY=mainEl.scrollTop<=0?e.touches[0].clientY:null;
+  ptrDelta=0;
+},{passive:true});
+mainEl.addEventListener('touchmove',e=>{
+  if(ptrStartY===null) return;
+  ptrDelta=e.touches[0].clientY-ptrStartY;
+  if(ptrDelta>0) $('ptr').style.height=Math.min(64,ptrDelta/2.2)+'px';
+},{passive:true});
+mainEl.addEventListener('touchend',()=>{
+  const trigger=ptrDelta>110;
+  $('ptr').style.height='0px';
+  ptrStartY=null; ptrDelta=0;
+  if(trigger) doRefresh();
+});
+function doRefresh(){
+  if(!STATIONS.length){ loadStops(); return; }   // retry directory after failed load
+  if($('view-dep').classList.contains('on')){
+    if(currentStation) fetchDeps();
+  }else{
+    if(lastTrips) planRoute();                    // re-plan with fresh realtime
+  }
 }
 
 /* ========================= NAV / INIT ========================= */
