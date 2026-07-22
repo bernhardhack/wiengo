@@ -116,6 +116,25 @@
   .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--muted);border-top-color:var(--text);
     border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px;margin-right:6px}
   @keyframes spin{to{transform:rotate(360deg)}}
+  .suggest input{padding-right:36px}
+  .clear-x{position:absolute;right:9px;top:19px;transform:translateY(-50%);width:22px;height:22px;border-radius:50%;
+    background:var(--line);color:var(--text);border:0;cursor:pointer;font-size:11px;line-height:1;display:none;z-index:5}
+  .chev{color:var(--muted);font-size:12px;margin-left:8px;transition:transform .15s;display:inline-block}
+  .opt.open .chev{transform:rotate(180deg)}
+  .legs{display:none;margin-top:10px;border-top:1px solid var(--line);padding-top:12px}
+  .opt.open .legs{display:block}
+  .leg{display:flex;gap:10px;margin-bottom:12px}
+  .leg:last-child{margin-bottom:2px}
+  .leg-rail{width:4px;border-radius:2px;flex:none}
+  .leg-body{flex:1;font-size:13.5px;line-height:1.5}
+  .leg-dir{color:var(--muted);font-size:12.5px;margin-top:2px}
+  .leg-dir b{color:var(--text)}
+  .leg-stops{margin-top:5px}
+  .leg-stops button{display:block;width:100%;background:none;border:0;color:var(--muted);font-family:inherit;
+    font-size:12.5px;cursor:pointer;padding:2.5px 0;text-align:left}
+  .leg-stops button:hover{color:var(--text)}
+  .leg-stops button.major{color:var(--text);font-weight:700;font-size:13.5px}
+  #map.full{height:72vh}
   .footer-note{font-size:11px;color:#5a6875;text-align:center;padding:4px 20px 14px;line-height:1.5}
 </style>
 </head>
@@ -153,6 +172,7 @@
       <div class="row">
         <div class="suggest grow">
           <input id="stopSearch" data-i18n-ph="searchStop" placeholder="Search a stop…" autocomplete="off">
+          <button class="clear-x" type="button" aria-label="Clear">✕</button>
           <div id="sugList" class="sug-list" style="display:none"></div>
         </div>
         <button class="btn" onclick="useNearest()" title="Nearest stop">📍</button>
@@ -169,12 +189,14 @@
       <div class="row" style="margin-bottom:8px">
         <div class="suggest grow">
           <input id="fromInput" data-i18n-ph="fromPh" placeholder="From (stop or 📍)" autocomplete="off">
+          <button class="clear-x" type="button" aria-label="Clear">✕</button>
           <div id="fromSug" class="sug-list" style="display:none"></div>
         </div>
       </div>
       <div class="row" style="margin-bottom:8px">
         <div class="suggest grow">
           <input id="toInput" data-i18n-ph="toPh" placeholder="To" autocomplete="off">
+          <button class="clear-x" type="button" aria-label="Clear">✕</button>
           <div id="toSug" class="sug-list" style="display:none"></div>
         </div>
         <button class="swap" onclick="swapFromTo()" title="Swap">⇅</button>
@@ -185,6 +207,7 @@
     <div id="map"></div>
     <div class="map-tools">
       <button class="btn ghost grow" onclick="recenterMe()" data-i18n="centerMe">⌖ Center on me</button>
+      <button class="btn ghost" onclick="toggleFull()" id="fsBtn" title="Expand map">⤢</button>
       <button id="goBtn" class="btn red grow" style="display:none" onclick="toggleJourney()" data-i18n="startJourney">▶ Follow along route</button>
     </div>
 
@@ -215,7 +238,7 @@
    to Cloudflare Workers (free) and paste its URL here, e.g.:
      const PROXY_URL = 'https://wiengo-proxy.YOURNAME.workers.dev';
    Leave '' to try direct calls (works only in CORS-disabled contexts). */
-const PROXY_URL = 'https://wiengo.bernhard-hack.workers.dev/';
+const PROXY_URL = '';
 
 const WL = 'https://www.wienerlinien.at';
 const URLS = {
@@ -240,6 +263,7 @@ const I18N = {
       geoDenied:'Location unavailable — allow location access or search by name.',
       nextStop:'Next stop (approx.)',offRoute:m=>`~${m} m from route`,nearby:'Nearby:',
       netErr:'Could not reach the Wiener Linien API. Check your PROXY_URL / connection.',
+      stopsN:n=>n===1?'1 stop':`${n} stops`,
       myLoc:'My location'},
   de:{tagline:'Öffi-Begleiter für Wien',tabDep:'Abfahrten',tabRoute:'Route',
       searchStop:'Haltestelle suchen…',fromPh:'Von (Haltestelle oder 📍)',toPh:'Nach',
@@ -253,6 +277,7 @@ const I18N = {
       geoDenied:'Standort nicht verfügbar — Zugriff erlauben oder nach Namen suchen.',
       nextStop:'Nächster Halt (ca.)',offRoute:m=>`~${m} m von der Route entfernt`,nearby:'In der Nähe:',
       netErr:'Wiener-Linien-API nicht erreichbar. PROXY_URL / Verbindung prüfen.',
+      stopsN:n=>n===1?'1 Station':`${n} Stationen`,
       myLoc:'Mein Standort'}
 };
 let lang='en';
@@ -431,23 +456,35 @@ function renderBoard(){
 /* ========================= SEARCH UIs ========================= */
 function wireSearch(inputId,listId,onPick,allowMe){
   const inp=$(inputId),list=$(listId);
-  inp.addEventListener('input',()=>{
-    inp.dataset.diva=''; inp.dataset.me='';
-    const q=inp.value.trim();
-    if(q.length<2){list.style.display='none';return;}
-    let hits=searchStations(q);
+  function render(q){
     let html='';
-    if(allowMe && myPos) html+=`<button data-me="1">📍 ${t('myLoc')}</button>`;
+    if(allowMe) html+=`<button data-me="1">📍 ${t('myLoc')}</button>`;
+    // typed query -> name matches; empty field -> nearby stations
+    const hits=(q&&q.length>=2)
+      ? searchStations(q)
+      : (myPos&&STATIONS.length
+          ? [...STATIONS].sort((a,b)=>dist(myPos,[a.lat,a.lon])-dist(myPos,[b.lat,b.lon])).slice(0,5)
+          : []);
     html+=hits.map(s=>`<button data-diva="${s.diva}">${esc(s.name)}<small>${s.diva}</small></button>`).join('');
     if(!html){list.style.display='none';return;}
     list.innerHTML=html; list.style.display='block';
     list.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
-      if(b.dataset.me){ inp.value='📍 '+t('myLoc'); inp.dataset.me='1'; }
-      else{ const s=STATIONS.find(x=>x.diva===b.dataset.diva); inp.value=s.name; inp.dataset.diva=s.diva; }
-      list.style.display='none';
+      if(b.dataset.me){
+        if(!myPos){ showErr(t('geoDenied')); startGeo(); }
+        inp.value='📍 '+t('myLoc'); inp.dataset.me='1'; inp.dataset.diva='';
+      }else{
+        const s=STATIONS.find(x=>x.diva===b.dataset.diva);
+        inp.value=s.name; inp.dataset.diva=s.diva; inp.dataset.me='';
+      }
+      list.style.display='none'; syncClears();
       onPick&&onPick();
     }));
+  }
+  inp.addEventListener('input',()=>{
+    inp.dataset.diva=''; inp.dataset.me=''; syncClears();
+    render(inp.value.trim());
   });
+  inp.addEventListener('focus',()=>render(inp.value.trim()));
 }
 document.addEventListener('click',e=>{
   if(!e.target.closest('.suggest')) document.querySelectorAll('.sug-list').forEach(l=>l.style.display='none');
@@ -457,12 +494,27 @@ $('sugList').addEventListener('click',e=>{
   const b=e.target.closest('button'); if(b&&b.dataset.diva) pickStation(b.dataset.diva);
 });
 wireSearch('fromInput','fromSug',null,true);
-wireSearch('toInput','toSug',null,false);
+wireSearch('toInput','toSug',null,true);
+// clear (✕) buttons
+function syncClears(){
+  document.querySelectorAll('.suggest').forEach(w=>{
+    const i=w.querySelector('input'),x=w.querySelector('.clear-x');
+    if(x) x.style.display=i.value?'block':'none';
+  });
+}
+document.querySelectorAll('.clear-x').forEach(x=>x.addEventListener('click',e=>{
+  const w=e.target.closest('.suggest'),i=w.querySelector('input');
+  i.value=''; i.dataset.diva=''; i.dataset.me='';
+  const l=w.querySelector('.sug-list'); if(l) l.style.display='none';
+  syncClears(); i.focus();
+}));
+syncClears();
 function swapFromTo(){
   const f=$('fromInput'),to=$('toInput');
-  if(f.dataset.me) return;
   [f.value,to.value]=[to.value,f.value];
   [f.dataset.diva,to.dataset.diva]=[to.dataset.diva,f.dataset.diva];
+  [f.dataset.me,to.dataset.me]=[to.dataset.me,f.dataset.me];
+  syncClears();
 }
 
 /* ========================= ROUTING (EFA XML_TRIP_REQUEST2) ========================= */
@@ -481,8 +533,12 @@ function efaParams(){
   }else if(f.dataset.diva){
     p.set('type_origin','stop'); p.set('name_origin',f.dataset.diva);
   }else return null;
-  if(to.dataset.diva){ p.set('type_destination','stop'); p.set('name_destination',to.dataset.diva); }
-  else return null;
+  if(to.dataset.me&&myPos){
+    p.set('type_destination','coord');
+    p.set('name_destination',myPos[1].toFixed(6)+':'+myPos[0].toFixed(6)+':WGS84[DD.ddddd]');
+  }else if(to.dataset.diva){
+    p.set('type_destination','stop'); p.set('name_destination',to.dataset.diva);
+  }else return null;
   return p.toString();
 }
 async function planRoute(){
@@ -517,15 +573,26 @@ function normalizeTrips(j){
       const walk=/fu(ß|ss)weg|footpath|walk|gehweg/i.test(modeName)||l.mode?.type===99||l.mode?.type===100;
       const p0=(l.points||[])[0]||{},p1=(l.points||[]).slice(-1)[0]||{};
       const pts=parsePath(l.path)|| [coordOf(p0),coordOf(p1)].filter(Boolean);
+      // intermediate stop sequence (EFA "stopSeq"), tolerant of array / object shapes
+      let seq=l.stopSeq||[];
+      if(!Array.isArray(seq)) seq=[].concat(seq.point||seq||[]);
+      const stops=seq.map(p=>({
+        name:(p.name||p.nameWO||'').trim(),
+        coord:coordOf(p),
+        time:p.dateTime?.time||''
+      })).filter(s=>s.name);
+      // walking distance from route geometry (EFA doesn't always send it)
+      const lenM=Math.round(pts.reduce((a,p,i)=>i?a+dist(pts[i-1],p):a,0)*1000);
+      const depT=p0.dateTime?.time||'',arrT=p1.dateTime?.time||'';
       return {
         walk, line:walk?null:num, dest:(l.mode?.destination||'').trim(),
         from:p0.name||p0.nameWO||'', to:p1.name||p1.nameWO||'',
-        depT:p0.dateTime?.time||'', arrT:p1.dateTime?.time||'',
-        rt:!!(p0.dateTime?.rtTime||l.realtime), pts,
-        durMin:hhmmToMin(l.timeMinute?null:l.mode?.time)||null
+        depT, arrT, legDur:minsBetween(depT,arrT),
+        rt:!!(p0.dateTime?.rtTime||l.realtime), pts, stops,
+        distM:walk?lenM:null
       };
     }).filter(l=>l.pts&&l.pts.length>=2);
-    const durMin=hhmmToMin(tr.duration)||L.reduce((a,l)=>a+(l.durMin||0),0);
+    const durMin=hhmmToMin(tr.duration)||L.reduce((a,l)=>a+(l.legDur||0),0);
     const changes=Math.max(0,L.filter(l=>!l.walk).length-1);
     return {durMin,changes,legs:L};
   }).filter(tr=>tr.legs.length);
@@ -533,6 +600,11 @@ function normalizeTrips(j){
 function hhmmToMin(s){
   if(!s||typeof s!=='string'||!/^\d{1,2}:\d{2}$/.test(s)) return null;
   const [h,m]=s.split(':').map(Number); return h*60+m;
+}
+function minsBetween(a,b){
+  const pa=hhmmToMin(a),pb=hhmmToMin(b);
+  if(pa===null||pb===null) return null;
+  return (pb-pa+1440)%1440; // midnight-safe
 }
 function coordOf(p){
   const c=p.ref?.coords||p.ref?.coord||'';
@@ -552,25 +624,64 @@ function parsePath(path){
 // Vienna sanity: lat≈48, lon≈16 — auto-detect coordinate order
 function orient(a,b){ return a>b?[a,b]:[b,a]; }
 
+function coordAttr(c){return c?c[0].toFixed(6)+','+c[1].toFixed(6):'';}
 function renderOptions(){
   const el=$('routeResults');
   if(!lastTrips||!lastTrips.length){el.innerHTML=`<div class="empty">${t('noRoute')}</div>`;return;}
   el.innerHTML=lastTrips.map((tr,i)=>{
     const first=tr.legs[0],last=tr.legs[tr.legs.length-1];
     const segHtml=tr.legs.map((l,j)=>{
-      const piece=l.walk?`<span class="seg-walk">🚶 ${t('walk')}</span>`:bullet(l.line,true);
+      const piece=l.walk
+        ?`<span class="seg-walk">🚶${l.distM?` ${l.distM} m`:''}</span>`
+        :bullet(l.line,true);
       return piece+(j<tr.legs.length-1?'<span class="seg-arrow">→</span>':'');
     }).join('');
-    return `<div class="card opt ${i===selIdx?'sel':''}" onclick="selectOption(${i})">
+    const legsHtml=tr.legs.map(l=>{
+      const col=l.walk?'#8B98A5':lineStyle(l.line).color;
+      let body;
+      if(l.walk){
+        body=`<b>🚶 ${t('walk')}</b>${l.distM?` · ${l.distM} m`:''}${l.legDur?` · ${l.legDur} ${t('min')}`:''}
+          <div class="leg-dir">${esc(l.from)} → ${esc(l.to)}</div>`;
+      }else{
+        const mids=l.stops.slice(1,-1);
+        const startC=coordAttr((l.stops[0]&&l.stops[0].coord)||l.pts[0]);
+        const endC=coordAttr((l.stops.length&&l.stops[l.stops.length-1].coord)||l.pts[l.pts.length-1]);
+        body=`${bullet(l.line,true)} <span class="leg-dir">${t('towards')} <b>${esc(l.dest||l.to)}</b></span>
+          <div class="leg-stops">
+            <button class="major" data-c="${startC}">${esc(l.from)}${l.depT?' · '+esc(l.depT):''}</button>
+            ${mids.map(s=>`<button data-c="${coordAttr(s.coord)}">&nbsp;&nbsp;·&nbsp;${esc(s.name)}${s.time?' · '+esc(s.time):''}</button>`).join('')}
+            <button class="major" data-c="${endC}">${esc(l.to)}${l.arrT?' · '+esc(l.arrT):''}</button>
+          </div>
+          <div class="leg-dir">${l.stops.length>1?t('stopsN')(l.stops.length-1):''}${l.legDur?` · ${l.legDur} ${t('min')}`:''}</div>`;
+      }
+      return `<div class="leg"><div class="leg-rail" style="background:${col}"></div><div class="leg-body">${body}</div></div>`;
+    }).join('');
+    return `<div class="card opt ${i===selIdx?'sel open':''}" data-i="${i}">
       <div class="opt-top">
         <span class="opt-time">${esc(first.depT)} → ${esc(last.arrT)}
           ${i===0?`<span class="badge-best">${t('best')}</span>`:''}</span>
-        <span class="opt-dur">${tr.durMin||'–'}<small>${t('min')}</small></span>
+        <span class="opt-dur">${tr.durMin||'–'}<small>${t('min')}</small><span class="chev">▾</span></span>
       </div>
       <div class="segs">${segHtml}</div>
       <div class="opt-meta">${t('changes')(tr.changes)} · ${t('depart')} ${esc(first.from)} · ${t('arrive')} ${esc(last.to)}</div>
+      <div class="legs">${legsHtml}</div>
     </div>`;
   }).join('');
+  el.querySelectorAll('.opt').forEach(card=>card.addEventListener('click',e=>{
+    const stopBtn=e.target.closest('.leg-stops button');
+    if(stopBtn){ // tap a stop -> pan the map to it
+      const c=stopBtn.dataset.c;
+      if(c){
+        const [la,lo]=c.split(',').map(Number);
+        map.setView([la,lo],16,{animate:true});
+        $('map').scrollIntoView({behavior:'smooth',block:'nearest'});
+      }
+      return;
+    }
+    const i=+card.dataset.i;
+    if(i===selIdx) card.classList.toggle('open'); // tap selected card again -> collapse/expand
+    else selectOption(i);
+  }));
 }
 
 /* ========================= MAP ========================= */
@@ -585,6 +696,11 @@ function recenterMe(){
   if(myPos) map.setView(myPos,15,{animate:true});
   else { showErr(t('geoDenied')); startGeo(); }
 }
+function toggleFull(){
+  const full=$('map').classList.toggle('full');
+  $('fsBtn').textContent=full?'⤡':'⤢';
+  setTimeout(()=>map.invalidateSize(),220);
+}
 let routePts=[]; // [{pt,next}] for progress tracking
 function selectOption(i){
   stopJourney();
@@ -596,7 +712,21 @@ function selectOption(i){
     const style=l.walk?{color:'#8B98A5',weight:4,dashArray:'2 8'}
                       :{color:lineStyle(l.line).color,weight:6,opacity:.95};
     L.polyline(l.pts,style).addTo(routeLayer);
-    l.pts.forEach(p=>{bounds.push(p);routePts.push({pt:p,next:l.to});});
+    l.pts.forEach(p=>{
+      bounds.push(p);
+      let nx=l.to;
+      if(!l.walk&&l.stops.length>1){ // next station in sequence from this point
+        let bi=0,bd=1e9;
+        l.stops.forEach((s,k)=>{ if(s.coord){const d=dist(p,s.coord); if(d<bd){bd=d;bi=k;}} });
+        nx=(l.stops[Math.min(bi+1,l.stops.length-1)]||{}).name||l.to;
+      }
+      routePts.push({pt:p,next:nx});
+    });
+    if(!l.walk) l.stops.slice(1,-1).forEach(s=>{ if(s.coord)
+      L.circleMarker(s.coord,{radius:3.5,color:'#fff',weight:1.5,
+        fillColor:lineStyle(l.line).color,fillOpacity:1})
+        .addTo(routeLayer).bindPopup(`<b>${esc(s.name)}</b>${s.time?' · '+esc(s.time):''}`);
+    });
     const endPt=l.pts[l.pts.length-1];
     const isLast=li===tr.legs.length-1;
     L.marker(endPt,{icon:L.divIcon({className:'',html:'<div class="stop-pin"></div>',iconSize:[12,12],iconAnchor:[6,6]})})
