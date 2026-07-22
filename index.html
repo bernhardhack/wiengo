@@ -247,7 +247,7 @@
 </main>
 
 <div class="footer-note">
-  Live data: Wiener Linien / Stadt Wien (CC BY 4.0, data.gv.at) · Map © OpenStreetMap / CARTO
+  Live data: Wiener Linien / Stadt Wien (CC BY 4.0, data.gv.at) · Map © OpenStreetMap / CARTO · Geocoding: Photon (OSM)
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -296,7 +296,7 @@ const I18N = {
       netErr:'Could not reach the Wiener Linien API. Check your PROXY_URL / connection.',
       stopsN:n=>n===1?'1 stop':`${n} stops`,
       savedHome:'Saved as Home',savedWork:'Saved as Work',
-      favHint:'Tap 🏠 / 💼 next to a stop to save it as Home / Work',
+      favHint:'Tap 🏠 / 💼 next to a stop or address to save it as Home / Work',
       nearbyTitle:'Nearby departures',walkLbl:(m,mi)=>`${m} m · ~${mi} min walk`,
       leaveNow:'🏃 go now',leaveIn:n=>`leave in ${n} min`,
       accHint:a=>`Position only accurate to ~${a} m (typical for laptops) — search an address above to recenter.`,
@@ -315,7 +315,7 @@ const I18N = {
       netErr:'Wiener-Linien-API nicht erreichbar. PROXY_URL / Verbindung prüfen.',
       stopsN:n=>n===1?'1 Station':`${n} Stationen`,
       savedHome:'Als Zuhause gespeichert',savedWork:'Als Arbeit gespeichert',
-      favHint:'🏠 / 💼 neben einer Haltestelle tippen, um sie als Zuhause / Arbeit zu speichern',
+      favHint:'🏠 / 💼 neben Haltestelle oder Adresse tippen, um sie als Zuhause / Arbeit zu speichern',
       nearbyTitle:'Abfahrten in der Nähe',walkLbl:(m,mi)=>`${m} m · ~${mi} Min zu Fuß`,
       leaveNow:'🏃 jetzt los',leaveIn:n=>`in ${n} Min losgehen`,
       accHint:a=>`Standort nur auf ~${a} m genau (typisch am Laptop) — Adresse oben suchen zum Neuzentrieren.`,
@@ -616,7 +616,7 @@ function maybeAutoNearby(){
 /* ========================= SEARCH UIs ========================= */
 /* Favorites (Home/Work) + frequency tracking — silently skipped if storage unavailable */
 function favs(){try{return JSON.parse(localStorage.getItem('wg_fav')||'{}')}catch(e){return{}}}
-function setFav(kind,st){try{const f=favs();f[kind]={diva:st.diva,name:st.name};localStorage.setItem('wg_fav',JSON.stringify(f));}catch(e){}}
+function setFav(kind,st){try{const f=favs();f[kind]={diva:st.diva||null,coord:st.coord||null,name:st.name};localStorage.setItem('wg_fav',JSON.stringify(f));}catch(e){}}
 function bumpFreq(diva){try{const q=JSON.parse(localStorage.getItem('wg_freq')||'{}');q[diva]=(q[diva]||0)+1;localStorage.setItem('wg_freq',JSON.stringify(q));}catch(e){}}
 function topFreq(n){try{
   const q=JSON.parse(localStorage.getItem('wg_freq')||'{}');
@@ -641,6 +641,25 @@ async function efaStopfinder(q){
     })).filter(p=>p.name&&p.coord).slice(0,5);
   }catch(e){ return null; }
 }
+/* Photon (OSM) geocoder: real address autocomplete, biased to Vienna */
+async function photonGeocode(q){
+  try{
+    const u='https://photon.komoot.io/api/?'+new URLSearchParams({
+      q, limit:'4', lat:'48.2082', lon:'16.3738', lang:lang==='de'?'de':'en'});
+    const r=await fetch(u);
+    if(!r.ok) return null;
+    const j=await r.json();
+    return (j.features||[]).map(f=>{
+      const p=f.properties||{},c=(f.geometry||{}).coordinates;
+      if(!c) return null;
+      const line1=[p.name||p.street,p.housenumber].filter(Boolean).join(' ');
+      const line2=p.postcode&&p.city?p.postcode+' '+p.city:(p.city||p.district||'');
+      return {name:[line1,line2].filter(Boolean).join(', '),kind:'address',coord:[c[1],c[0]]};
+    }).filter(x=>x&&x.name&&x.coord)
+      .filter(x=>x.coord[0]>47.95&&x.coord[0]<48.40&&x.coord[1]>16.05&&x.coord[1]<16.65) // Vienna region
+      .slice(0,4);
+  }catch(e){ return null; }
+}
 
 function wireSearch(inputId,listId,onPick,allowMe){
   const inp=$(inputId),list=$(listId);
@@ -656,15 +675,19 @@ function wireSearch(inputId,listId,onPick,allowMe){
       // plus stopfinder results: addresses, POIs, non-WL stations (skip WL duplicates)
       (extra||[]).forEach(p=>{
         if(p.kind==='stop'&&localNames.has(norm(p.name))) return;
-        html+=`<button data-kind="${esc(p.kind)}" data-coord="${p.coord[0].toFixed(6)},${p.coord[1].toFixed(6)}">📌 ${esc(p.name)}</button>`;
+        const cs=p.coord[0].toFixed(6)+','+p.coord[1].toFixed(6);
+        html+=`<button data-kind="${esc(p.kind)}" data-coord="${cs}" data-n="${esc(p.name)}">📌 ${esc(p.name)}<span class="fav-set"><i data-k="home" data-c="${cs}" data-n="${esc(p.name)}" title="Set as Home">🏠</i><i data-k="work" data-c="${cs}" data-n="${esc(p.name)}" title="Set as Work">💼</i></span></button>`;
       });
       if(html) html+=`<div class="sug-hint">${t('favHint')}</div>`;
     }else{
       // empty: my location, Home, Work, frequent, then nearest
       if(allowMe) html+=`<button data-me="1">📍 ${t('myLoc')}</button>`;
       const used=new Set();
-      if(f.home){used.add(f.home.diva);html+=`<button data-diva="${f.home.diva}">🏠 ${esc(f.home.name)}</button>`;}
-      if(f.work){used.add(f.work.diva);html+=`<button data-diva="${f.work.diva}">💼 ${esc(f.work.name)}</button>`;}
+      const favRow=(fv,ic)=>fv.diva
+        ?`<button data-diva="${fv.diva}">${ic} ${esc(fv.name)}</button>`
+        :`<button data-kind="address" data-coord="${fv.coord}" data-n="${esc(fv.name)}">${ic} ${esc(fv.name)}</button>`;
+      if(f.home){if(f.home.diva)used.add(f.home.diva);html+=favRow(f.home,'🏠');}
+      if(f.work){if(f.work.diva)used.add(f.work.diva);html+=favRow(f.work,'💼');}
       topFreq(6).forEach(s=>{
         if(used.size>=6||used.has(s.diva)) return;
         used.add(s.diva);
@@ -683,10 +706,16 @@ function wireSearch(inputId,listId,onPick,allowMe){
     list.innerHTML=html; list.style.display='block';
     list.querySelectorAll('.fav-set i').forEach(ic=>ic.addEventListener('click',e=>{
       e.stopPropagation();
-      const s=STATIONS.find(x=>x.diva===ic.dataset.d);
-      if(!s) return;
-      setFav(ic.dataset.k,s);
-      showMsg((ic.dataset.k==='home'?t('savedHome'):t('savedWork'))+': '+s.name);
+      let fv=null;
+      if(ic.dataset.d){
+        const s=STATIONS.find(x=>x.diva===ic.dataset.d);
+        if(s) fv={diva:s.diva,name:s.name};
+      }else if(ic.dataset.c){
+        fv={coord:ic.dataset.c,name:ic.dataset.n||''};
+      }
+      if(!fv||!fv.name) return;
+      setFav(ic.dataset.k,fv);
+      showMsg((ic.dataset.k==='home'?t('savedHome'):t('savedWork'))+': '+fv.name);
       list.style.display='none';
     }));
     list.querySelectorAll('button[data-me],button[data-diva],button[data-coord]').forEach(b=>b.addEventListener('click',()=>{
@@ -694,7 +723,7 @@ function wireSearch(inputId,listId,onPick,allowMe){
         if(!myPos){ showErr(t('geoDenied')); startGeo(); }
         inp.value='📍 '+t('myLoc'); inp.dataset.me='1'; inp.dataset.diva=''; inp.dataset.coord='';
       }else if(b.dataset.coord){
-        const name=b.textContent.replace(/^📌\s*/,'').trim();
+        const name=b.dataset.n||b.textContent.replace(/^(📌|🏠|💼)\s*/,'').trim();
         if(inputId==='stopSearch'){
           const [la,lo]=b.dataset.coord.split(',').map(Number);
           inp.value=name;
@@ -718,8 +747,12 @@ function wireSearch(inputId,listId,onPick,allowMe){
     inp.dataset.diva=''; inp.dataset.me=''; inp.dataset.coord=''; syncClears();
     const q=inp.value.trim();
     render(q);
-    if(q.length>=3) efaStopfinder(q).then(pts=>{
-      if(pts&&pts.length&&inp.value.trim()===q&&document.activeElement===inp) render(q,pts);
+    if(q.length>=3) Promise.all([efaStopfinder(q),photonGeocode(q)]).then(([a,b])=>{
+      const seen=new Set(),extra=[];
+      [...(a||[]),...(b||[])].forEach(p=>{
+        const k=norm(p.name); if(seen.has(k)) return; seen.add(k); extra.push(p);
+      });
+      if(extra.length&&inp.value.trim()===q&&document.activeElement===inp) render(q,extra);
     });
   });
   inp.addEventListener('focus',()=>render(inp.value.trim()));
