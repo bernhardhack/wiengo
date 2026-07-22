@@ -13,10 +13,10 @@
  * Usage from the app:  {WORKER_URL}/?u=<url-encoded wienerlinien.at URL>
  */
 
-const ALLOWED_HOSTS = new Set(['www.wienerlinien.at', 'wienerlinien.at']);
+const ALLOWED_HOSTS = new Set(['www.wienerlinien.at', 'wienerlinien.at', 'gbfs.nextbike.net']);
 
-// Cache static open-data files (stop CSV) for a day; realtime stays fresh.
-const CACHEABLE = /\/ogd_realtime\/doku\//;
+// Cache static open-data files for a day; realtime stays fresh.
+const CACHEABLE = /\/ogd_realtime\/doku\/|station_information/;
 
 export default {
   async fetch(request) {
