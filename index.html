@@ -80,6 +80,12 @@
   .cd small{display:block;font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.12em;text-transform:uppercase;margin-top:3px}
   .cd.now{color:var(--ok)}
   .cd .then{font-size:12px;font-weight:700;color:var(--muted);margin-left:4px}
+  .near-head{display:flex;align-items:baseline;justify-content:space-between;margin:16px 2px 8px;gap:10px}
+  .near-head b{font-size:15px}
+  .near-head span{font-size:12px;color:var(--muted);flex:none}
+  .leave{color:var(--ok);font-weight:700}
+  .leave.dim{color:var(--muted);font-weight:600}
+  .dep.gone{opacity:.4}
   .suggest{position:relative}
   .sug-list{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:1000;background:var(--panel-2);
     border:1px solid var(--line);border-radius:10px;overflow:hidden;box-shadow:0 12px 30px rgba(0,0,0,.5);max-height:260px;overflow-y:auto}
@@ -284,6 +290,8 @@ const I18N = {
       netErr:'Could not reach the Wiener Linien API. Check your PROXY_URL / connection.',
       stopsN:n=>n===1?'1 stop':`${n} stops`,
       savedHome:'Saved as Home',savedWork:'Saved as Work',
+      nearbyTitle:'Nearby departures',walkLbl:(m,mi)=>`${m} m · ~${mi} min walk`,
+      leaveNow:'🏃 go now',leaveIn:n=>`leave in ${n} min`,
       myLoc:'My location'},
   de:{tagline:'Öffi-Begleiter für Wien',tabDep:'Abfahrten',tabRoute:'Route',
       searchStop:'Haltestelle suchen…',fromPh:'Von (Haltestelle oder 📍)',toPh:'Nach',
@@ -299,6 +307,8 @@ const I18N = {
       netErr:'Wiener-Linien-API nicht erreichbar. PROXY_URL / Verbindung prüfen.',
       stopsN:n=>n===1?'1 Station':`${n} Stationen`,
       savedHome:'Als Zuhause gespeichert',savedWork:'Als Arbeit gespeichert',
+      nearbyTitle:'Abfahrten in der Nähe',walkLbl:(m,mi)=>`${m} m · ~${mi} Min zu Fuß`,
+      leaveNow:'🏃 jetzt los',leaveIn:n=>`in ${n} Min losgehen`,
       myLoc:'Mein Standort'}
 };
 let lang='en';
@@ -376,7 +386,7 @@ async function loadStops(){
     showErr(t('netErr')+' ('+err.message+')');
   }
 }
-function stopsReady(){ $('stopCount').textContent=t('stopsReady')(STATIONS.length); renderNearby(); }
+function stopsReady(){ $('stopCount').textContent=t('stopsReady')(STATIONS.length); renderNearby(); maybeAutoNearby(); }
 function searchStations(q){
   q=q.toLowerCase();
   return STATIONS.filter(s=>s.name.toLowerCase().includes(q))
@@ -392,6 +402,7 @@ function startGeo(){
     myPos=[p.coords.latitude,p.coords.longitude];
     meMarker.setLatLng(myPos).addTo(map);
     renderNearby();
+    maybeAutoNearby();
     updateStopHighlight();
     if(journeyOn) journeyTick();
   },()=>{},{enableHighAccuracy:true,maximumAge:5000,timeout:15000});
@@ -408,13 +419,17 @@ function renderNearby(){
 function useNearest(){
   if(!myPos){ showErr(t('geoDenied')); startGeo(); return; }
   if(!STATIONS.length) return;
-  const s=[...STATIONS].sort((a,b)=>dist(myPos,[a.lat,a.lon])-dist(myPos,[b.lat,b.lon]))[0];
-  pickStation(s.diva);
+  depMode='nearby'; currentStation=null; depData=null;
+  $('stopSearch').value=''; syncClears();
+  fetchNearby();
+  clearInterval(depTimer);
+  depTimer=setInterval(fetchNearby,30000);
 }
 
 /* ========================= DEPARTURES (real-time monitor) ========================= */
-let currentStation=null,depData=null,depTimer=null;
+let currentStation=null,depData=null,depTimer=null,depMode='single',nearbyList=[],autoNearby=false;
 function pickStation(diva){
+  depMode='single'; nearbyList=[];
   currentStation=STATIONS.find(s=>s.diva===diva);
   $('stopSearch').value=currentStation.name;
   $('sugList').style.display='none';
@@ -437,11 +452,10 @@ async function fetchDeps(){
     if(!PROXY_URL) $('proxyBanner').style.display='block';
   }
 }
-function renderBoard(){
-  if(!currentStation) return;
-  if(!depData){ return; }
-  const rows=[]; // {line,towards,cds:[{m,rt}],type}
-  (depData.monitors||[]).forEach(mon=>{
+// shared: extract sorted departure rows from a monitor payload
+function depRows(data){
+  const rows=[];
+  ((data&&data.monitors)||[]).forEach(mon=>{
     (mon.lines||[]).forEach(l=>{
       const deps=((l.departures||{}).departure||[]).slice(0,2).map(d=>({
         m:d.departureTime?.countdown ?? null,
@@ -452,28 +466,78 @@ function renderBoard(){
     });
   });
   rows.sort((a,b)=>a.cds[0].m-b.cds[0].m);
+  return rows;
+}
+// shared: one departure row; walkMin!=null adds the leave-by tag
+function depRowHtml(r,walkMin){
+  const s=lineStyle(r.line);
+  const first=r.cds[0],next=r.cds[1];
+  const isNow=first.m<1;
+  let leave='',gone='';
+  if(walkMin!=null){
+    const li=first.m-walkMin;
+    if(li<0) gone=' gone';                                              // won't make this one
+    else if(li<=1) leave=` · <span class="leave">${t('leaveNow')}</span>`;
+    else leave=` · <span class="leave dim">${t('leaveIn')(li)}</span>`;
+  }
+  return `<div class="dep${gone}">
+    ${bullet(r.line)}
+    <div class="grow">
+      <div class="dest">${t('towards')} ${esc(r.towards||'')}</div>
+      <div class="kind"><span class="rt ${first.rt?'':'plan'}"></span>${s.kind}${first.rt?'':' · Plan'}${leave}</div>
+    </div>
+    <div class="cd ${isNow?'now':''}">${isNow?t('now'):first.m}${next?`<span class="then">, ${next.m}</span>`:''}
+      <small>${isNow?'':t('min')}</small></div>
+  </div>`;
+}
+function renderBoard(){
+  if(!currentStation||!depData) return;
+  const rows=depRows(depData);
   let html=`<div class="stop-head"><h2>${esc(currentStation.name)}</h2>
     <span class="live-tag"><span class="live-dot"></span>Live</span></div>`;
   if(!rows.length) html+=`<div class="empty">–</div>`;
-  rows.forEach(r=>{
-    const s=lineStyle(r.line);
-    const first=r.cds[0],next=r.cds[1];
-    const isNow=first.m<1;
-    html+=`<div class="dep">
-      ${bullet(r.line)}
-      <div class="grow">
-        <div class="dest">${t('towards')} ${esc(r.towards||'')}</div>
-        <div class="kind"><span class="rt ${first.rt?'':'plan'}"></span>${s.kind}${first.rt?'':' · Plan'}</div>
-      </div>
-      <div class="cd ${isNow?'now':''}">${isNow?t('now'):first.m}${next?`<span class="then">, ${next.m}</span>`:''}
-        <small>${isNow?'':t('min')}</small></div>
-    </div>`;
-  });
-  // service disruptions, if any
+  rows.forEach(r=>html+=depRowHtml(r,null));
   (depData.trafficInfos||[]).slice(0,3).forEach(ti=>{
     html+=`<div class="banner warn">⚠️ <b>${esc(ti.title||'')}</b> ${esc(ti.description||'')}</div>`;
   });
   $('depBoard').innerHTML=html;
+}
+/* ---- nearby mode: all stations in walking range, at a glance ---- */
+async function fetchNearby(){
+  if(!myPos||!STATIONS.length) return;
+  const cand=[...STATIONS].map(s=>({s,d:dist(myPos,[s.lat,s.lon])}))
+    .sort((a,b)=>a.d-b.d).filter(x=>x.d<=0.75).slice(0,5);   // up to 5 stations within 750 m
+  if(!cand.length){ $('depBoard').innerHTML=`<div class="empty">–</div>`; return; }
+  if(!nearbyList.length) $('depBoard').innerHTML=`<div class="empty"><span class="spin"></span>${t('loadingDeps')}</div>`;
+  const res=await Promise.all(cand.map(c=>
+    fetch(prox(URLS.monitor(c.s.diva))).then(r=>r.ok?r.json():null).catch(()=>null)));
+  if(depMode!=='nearby') return; // user switched to a single stop meanwhile
+  nearbyList=cand.map((c,i)=>({
+    station:c.s,
+    distM:Math.round(c.d*1000),
+    walkMin:Math.max(1,Math.round(c.d*1000/75)),   // ~4.5 km/h
+    data:(res[i]&&res[i].data)||null
+  }));
+  renderNearbyBoard();
+}
+function renderNearbyBoard(){
+  let html=`<div class="stop-head"><h2>${t('nearbyTitle')}</h2>
+    <span class="live-tag"><span class="live-dot"></span>Live</span></div>`;
+  nearbyList.forEach(e=>{
+    html+=`<div class="near-head"><b>${esc(e.station.name)}</b>
+      <span>${t('walkLbl')(e.distM,e.walkMin)}</span></div>`;
+    const rows=e.data?depRows(e.data).slice(0,4):[];
+    if(!rows.length){ html+=`<div class="empty" style="padding:6px 0 10px">–</div>`; return; }
+    rows.forEach(r=>html+=depRowHtml(r,e.walkMin));
+  });
+  if(!nearbyList.length) html+=`<div class="empty">–</div>`;
+  $('depBoard').innerHTML=html;
+}
+// show the nearby board automatically once stops + position are available
+function maybeAutoNearby(){
+  if(autoNearby||currentStation||depMode==='nearby') return;
+  if(!myPos||!STATIONS.length) return;
+  autoNearby=true; useNearest();
 }
 
 /* ========================= SEARCH UIs ========================= */
@@ -872,7 +936,8 @@ mainEl.addEventListener('touchend',()=>{
 function doRefresh(){
   if(!STATIONS.length){ loadStops(); return; }   // retry directory after failed load
   if($('view-dep').classList.contains('on')){
-    if(currentStation) fetchDeps();
+    if(depMode==='nearby') fetchNearby();
+    else if(currentStation) fetchDeps();
   }else{
     if(lastTrips) planRoute();                    // re-plan with fresh realtime
   }
