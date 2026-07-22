@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WienGo — Vienna Transit Companion (Live)</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0F141A; --panel:#171E27; --panel-2:#1E2733; --line:#2A3542;
+    --text:#F2F5F7; --muted:#8B98A5; --wl-red:#E3000F; --ok:#3DDC84; --warn:#F2B01E;
+    --radius:14px;
+    --font:'Archivo',-apple-system,'Helvetica Neue',Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:var(--bg);color:var(--text);font-family:var(--font);
+    -webkit-font-smoothing:antialiased;display:flex;flex-direction:column;
+    max-width:520px;margin:0 auto;border-left:1px solid var(--line);border-right:1px solid var(--line);
+  }
+  header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 10px}
+  .brand{display:flex;align-items:center;gap:10px}
+  .brand-mark{width:34px;height:34px;border-radius:8px;background:var(--wl-red);display:grid;place-items:center;
+    font-weight:900;font-size:19px;color:#fff;font-variation-settings:'wdth' 75;letter-spacing:-.5px}
+  .brand h1{font-size:19px;font-weight:800;font-variation-settings:'wdth' 118}
+  .brand small{display:block;font-size:10.5px;font-weight:500;color:var(--muted);letter-spacing:.14em;text-transform:uppercase}
+  .lang{display:flex;border:1px solid var(--line);border-radius:99px;overflow:hidden;font-size:12px}
+  .lang button{background:none;border:0;color:var(--muted);padding:5px 11px;cursor:pointer;font-family:inherit;font-weight:700}
+  .lang button.on{background:var(--panel-2);color:var(--text)}
+  nav{display:flex;gap:8px;padding:0 16px 12px}
+  nav button{flex:1;background:var(--panel);border:1px solid var(--line);color:var(--muted);padding:10px;
+    border-radius:10px;font-family:inherit;font-weight:700;font-size:14px;cursor:pointer;transition:background .15s,color .15s}
+  nav button.on{background:var(--wl-red);border-color:var(--wl-red);color:#fff}
+  main{flex:1;overflow-y:auto;padding:0 16px 24px}
+  .view{display:none}
+  .view.on{display:block}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:12px}
+  .row{display:flex;align-items:center;gap:10px}
+  .grow{flex:1}
+  input{width:100%;background:var(--panel-2);border:1px solid var(--line);color:var(--text);
+    border-radius:10px;padding:11px 12px;font-family:inherit;font-size:15px;outline:none}
+  input:focus{border-color:var(--wl-red)}
+  .btn{background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:10px;
+    padding:11px 14px;font-family:inherit;font-weight:700;font-size:14px;cursor:pointer;white-space:nowrap}
+  .btn.red{background:var(--wl-red);border-color:var(--wl-red);color:#fff}
+  .btn.ghost{background:none}
+  .btn:disabled{opacity:.5;cursor:default}
+  .btn:active{transform:translateY(1px)}
+  .hint{font-size:12px;color:var(--muted);margin-top:8px;line-height:1.5}
+  .banner{border-radius:10px;padding:10px 12px;font-size:12.5px;line-height:1.55;margin-bottom:12px}
+  .banner.warn{background:#2b230d;border:1px solid #5c4a14;color:#ecd9a0}
+  .banner.err{background:#2b0f12;border:1px solid #5c1c22;color:#f0b6bc}
+  .banner code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:4px;font-size:11.5px}
+  .bullet{display:inline-grid;place-items:center;min-width:34px;height:26px;padding:0 7px;border-radius:6px;
+    color:#fff;font-weight:900;font-size:14px;font-variation-settings:'wdth' 80;flex:none}
+  .bullet.sm{min-width:28px;height:21px;font-size:12px;border-radius:5px}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+  .chip{background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:99px;
+    padding:6px 12px;font-family:inherit;font-size:12.5px;font-weight:600;cursor:pointer}
+  .chip small{color:var(--muted);font-weight:500;margin-left:4px}
+  .stop-head{display:flex;align-items:baseline;justify-content:space-between;margin:16px 2px 10px;gap:10px}
+  .stop-head h2{font-size:20px;font-weight:800;font-variation-settings:'wdth' 112}
+  .live-tag{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--ok);font-weight:700;
+    letter-spacing:.1em;text-transform:uppercase;flex:none}
+  .live-dot{width:7px;height:7px;border-radius:50%;background:var(--ok);animation:pulse 1.6s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+  @media (prefers-reduced-motion:reduce){.live-dot{animation:none}}
+  .dep{display:flex;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;padding:11px 13px;margin-bottom:8px}
+  .dep .dest{font-weight:600;font-size:15px}
+  .dep .kind{font-size:11.5px;color:var(--muted);margin-top:1px;display:flex;align-items:center;gap:6px}
+  .rt{width:6px;height:6px;border-radius:50%;background:var(--ok);flex:none}
+  .rt.plan{background:var(--muted)}
+  .cd{text-align:right;font-weight:900;font-size:24px;line-height:1;font-variation-settings:'wdth' 75;min-width:70px}
+  .cd small{display:block;font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.12em;text-transform:uppercase;margin-top:3px}
+  .cd.now{color:var(--ok)}
+  .cd .then{font-size:12px;font-weight:700;color:var(--muted);margin-left:4px}
+  .suggest{position:relative}
+  .sug-list{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:1000;background:var(--panel-2);
+    border:1px solid var(--line);border-radius:10px;overflow:hidden;box-shadow:0 12px 30px rgba(0,0,0,.5);max-height:260px;overflow-y:auto}
+  .sug-list button{display:flex;gap:8px;align-items:center;width:100%;text-align:left;background:none;border:0;
+    color:var(--text);padding:11px 13px;font-family:inherit;font-size:14px;cursor:pointer}
+  .sug-list button:hover{background:var(--panel)}
+  .sug-list small{color:var(--muted);margin-left:auto;flex:none}
+  .swap{width:38px;height:38px;flex:none;border-radius:50%;background:var(--panel-2);border:1px solid var(--line);
+    color:var(--text);cursor:pointer;font-size:16px}
+  .opt{cursor:pointer;transition:border-color .15s}
+  .opt:hover{border-color:#3d4c5e}
+  .opt.sel{border-color:var(--wl-red)}
+  .opt-top{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px}
+  .opt-time{font-weight:800;font-size:16px}
+  .opt-dur{font-weight:900;font-size:20px;font-variation-settings:'wdth' 80}
+  .opt-dur small{font-size:11px;color:var(--muted);font-weight:600;margin-left:2px}
+  .badge-best{font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;background:var(--ok);
+    color:#08130c;border-radius:5px;padding:3px 7px;margin-left:8px;vertical-align:2px}
+  .segs{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+  .seg-walk{color:var(--muted);font-size:12.5px;font-weight:600}
+  .seg-arrow{color:#4a5a6b;font-size:12px}
+  .opt-meta{font-size:12px;color:var(--muted);margin-top:8px}
+  #map{height:300px;border-radius:var(--radius);border:1px solid var(--line);margin-bottom:12px;background:#0a0e13}
+  .leaflet-container{font-family:var(--font)}
+  .map-tools{display:flex;gap:8px;margin-bottom:12px}
+  .me-dot{width:16px;height:16px;border-radius:50%;background:#2F80ED;border:3px solid #fff;
+    box-shadow:0 0 0 6px rgba(47,128,237,.25)}
+  .stop-pin{width:12px;height:12px;border-radius:50%;background:#fff;border:3px solid #111}
+  .journey{display:none}
+  .journey.on{display:block}
+  .prog-wrap{background:var(--panel-2);border-radius:99px;height:8px;overflow:hidden;margin:10px 0 8px}
+  .prog{height:100%;width:0%;background:var(--wl-red);border-radius:99px;transition:width .4s linear}
+  .next-stop{font-size:13px;color:var(--muted)}
+  .next-stop b{color:var(--text)}
+  .empty{text-align:center;color:var(--muted);padding:36px 16px;font-size:14px;line-height:1.6}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--muted);border-top-color:var(--text);
+    border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px;margin-right:6px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .footer-note{font-size:11px;color:#5a6875;text-align:center;padding:4px 20px 14px;line-height:1.5}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="brand-mark">W</div>
+    <div>
+      <h1>WienGo</h1>
+      <small data-i18n="tagline">Vienna transit companion</small>
+    </div>
+  </div>
+  <div class="lang">
+    <button id="langEN" class="on" onclick="setLang('en')">EN</button>
+    <button id="langDE" onclick="setLang('de')">DE</button>
+  </div>
+</header>
+
+<nav>
+  <button id="tabDep" class="on" onclick="showView('dep')" data-i18n="tabDep">Departures</button>
+  <button id="tabRoute" onclick="showView('route')" data-i18n="tabRoute">Route</button>
+</nav>
+
+<main>
+  <div id="proxyBanner" class="banner warn" style="display:none;margin:0 0 12px">
+    <b>Setup needed:</b> set <code>PROXY_URL</code> at the top of the script to your deployed
+    proxy (see README / proxy-worker.js). Browsers block direct calls to wienerlinien.at (CORS).
+  </div>
+  <div id="errBanner" class="banner err" style="display:none"></div>
+
+  <!-- ================= DEPARTURES ================= -->
+  <section id="view-dep" class="view on">
+    <div class="card">
+      <div class="row">
+        <div class="suggest grow">
+          <input id="stopSearch" data-i18n-ph="searchStop" placeholder="Search a stop…" autocomplete="off">
+          <div id="sugList" class="sug-list" style="display:none"></div>
+        </div>
+        <button class="btn" onclick="useNearest()" title="Nearest stop">📍</button>
+      </div>
+      <div id="nearbyChips" class="chips"></div>
+      <div class="hint" id="stopCount"></div>
+    </div>
+    <div id="depBoard"><div class="empty" data-i18n="emptyDep">Search for a stop or tap 📍 to see live departures.</div></div>
+  </section>
+
+  <!-- ================= ROUTE ================= -->
+  <section id="view-route" class="view">
+    <div class="card">
+      <div class="row" style="margin-bottom:8px">
+        <div class="suggest grow">
+          <input id="fromInput" data-i18n-ph="fromPh" placeholder="From (stop or 📍)" autocomplete="off">
+          <div id="fromSug" class="sug-list" style="display:none"></div>
+        </div>
+      </div>
+      <div class="row" style="margin-bottom:8px">
+        <div class="suggest grow">
+          <input id="toInput" data-i18n-ph="toPh" placeholder="To" autocomplete="off">
+          <div id="toSug" class="sug-list" style="display:none"></div>
+        </div>
+        <button class="swap" onclick="swapFromTo()" title="Swap">⇅</button>
+      </div>
+      <button id="planBtn" class="btn red" style="width:100%" onclick="planRoute()" data-i18n="findRoutes">Find routes</button>
+    </div>
+
+    <div id="map"></div>
+    <div class="map-tools">
+      <button class="btn ghost grow" onclick="recenterMe()" data-i18n="centerMe">⌖ Center on me</button>
+      <button id="goBtn" class="btn red grow" style="display:none" onclick="toggleJourney()" data-i18n="startJourney">▶ Follow along route</button>
+    </div>
+
+    <div id="journey" class="card journey">
+      <div class="row" style="justify-content:space-between">
+        <b data-i18n="onTheWay">On the way</b>
+        <span class="live-tag"><span class="live-dot"></span>GPS</span>
+      </div>
+      <div class="prog-wrap"><div id="prog" class="prog"></div></div>
+      <div id="nextStop" class="next-stop"></div>
+    </div>
+
+    <div id="routeResults"></div>
+  </section>
+</main>
+
+<div class="footer-note">
+  Live data: Wiener Linien / Stadt Wien (CC BY 4.0, data.gv.at) · Map © OpenStreetMap / CARTO
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+/* =====================================================================
+   CONFIG — the only thing you must edit
+   =====================================================================
+   Browsers can't call wienerlinien.at directly (no CORS headers), so all
+   requests go through a tiny proxy you control. Deploy proxy-worker.js
+   to Cloudflare Workers (free) and paste its URL here, e.g.:
+     const PROXY_URL = 'https://wiengo-proxy.YOURNAME.workers.dev';
+   Leave '' to try direct calls (works only in CORS-disabled contexts). */
+const PROXY_URL = 'https://wiengo.bernhard-hack.workers.dev/';
+
+const WL = 'https://www.wienerlinien.at';
+const URLS = {
+  stops:   WL + '/ogd_realtime/doku/ogd/wienerlinien-ogd-haltepunkte.csv',
+  monitor: diva => WL + '/ogd_realtime/monitor?diva=' + diva +
+           '&activateTrafficInfo=stoerungkurz&activateTrafficInfo=stoerunglang',
+  route:   q => WL + '/ogd_routing/XML_TRIP_REQUEST2?' + q
+};
+const prox = url => PROXY_URL ? PROXY_URL.replace(/\/$/,'') + '/?u=' + encodeURIComponent(url) : url;
+
+/* ========================= i18n ========================= */
+const I18N = {
+  en:{tagline:'Vienna transit companion',tabDep:'Departures',tabRoute:'Route',
+      searchStop:'Search a stop…',fromPh:'From (stop or 📍 my location)',toPh:'To',
+      findRoutes:'Find routes',centerMe:'⌖ Center on me',startJourney:'▶ Follow along route',
+      stopJourney:'■ Stop following',onTheWay:'On the way',
+      towards:'towards',min:'min',now:'now',best:'Best',changes:c=>c===1?'1 change':`${c} changes`,
+      walk:'walk',depart:'Dep',arrive:'Arr',noRoute:'No route found. Try different stops.',
+      emptyDep:'Search for a stop or tap 📍 to see live departures.',
+      loadingStops:'Loading stop directory…',stopsReady:n=>`${n} stops loaded · live data`,
+      searching:'Searching routes…',loadingDeps:'Loading departures…',
+      geoDenied:'Location unavailable — allow location access or search by name.',
+      nextStop:'Next stop (approx.)',offRoute:m=>`~${m} m from route`,nearby:'Nearby:',
+      netErr:'Could not reach the Wiener Linien API. Check your PROXY_URL / connection.',
+      myLoc:'My location'},
+  de:{tagline:'Öffi-Begleiter für Wien',tabDep:'Abfahrten',tabRoute:'Route',
+      searchStop:'Haltestelle suchen…',fromPh:'Von (Haltestelle oder 📍)',toPh:'Nach',
+      findRoutes:'Routen finden',centerMe:'⌖ Auf mich zentrieren',startJourney:'▶ Entlang der Route folgen',
+      stopJourney:'■ Nicht mehr folgen',onTheWay:'Unterwegs',
+      towards:'Richtung',min:'Min',now:'jetzt',best:'Beste',changes:c=>c===1?'1× umsteigen':`${c}× umsteigen`,
+      walk:'zu Fuß',depart:'Ab',arrive:'An',noRoute:'Keine Route gefunden. Andere Haltestellen probieren.',
+      emptyDep:'Haltestelle suchen oder 📍 tippen für Live-Abfahrten.',
+      loadingStops:'Lade Haltestellenverzeichnis…',stopsReady:n=>`${n} Haltestellen geladen · Live-Daten`,
+      searching:'Suche Routen…',loadingDeps:'Lade Abfahrten…',
+      geoDenied:'Standort nicht verfügbar — Zugriff erlauben oder nach Namen suchen.',
+      nextStop:'Nächster Halt (ca.)',offRoute:m=>`~${m} m von der Route entfernt`,nearby:'In der Nähe:',
+      netErr:'Wiener-Linien-API nicht erreichbar. PROXY_URL / Verbindung prüfen.',
+      myLoc:'Mein Standort'}
+};
+let lang='en';
+const t=k=>I18N[lang][k];
+function setLang(l){
+  lang=l;
+  document.getElementById('langEN').classList.toggle('on',l==='en');
+  document.getElementById('langDE').classList.toggle('on',l==='de');
+  document.querySelectorAll('[data-i18n]').forEach(el=>{
+    const v=I18N[l][el.dataset.i18n]; if(typeof v==='string') el.textContent=v;
+  });
+  document.querySelectorAll('[data-i18n-ph]').forEach(el=>el.placeholder=I18N[l][el.dataset.i18nPh]);
+  if(currentStation) renderBoard();
+  if(lastTrips) renderOptions();
+}
+
+/* ========================= helpers ========================= */
+const $=id=>document.getElementById(id);
+function dist(a,b){
+  const R=6371,dLat=(b[0]-a[0])*Math.PI/180,dLon=(b[1]-a[1])*Math.PI/180;
+  const s=Math.sin(dLat/2)**2+Math.cos(a[0]*Math.PI/180)*Math.cos(b[0]*Math.PI/180)*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(s));
+}
+function showErr(msg){const b=$('errBanner');b.textContent=msg;b.style.display='block';clearTimeout(b._t);b._t=setTimeout(()=>b.style.display='none',8000);}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+// Line styling
+const METRO_COLORS={U1:'#E20613',U2:'#9F5F9F',U3:'#EF7D00',U4:'#00963F',U5:'#0098A1',U6:'#8C6239'};
+function lineStyle(name){
+  const n=(name||'').trim();
+  if(METRO_COLORS[n]) return {color:METRO_COLORS[n],kind:'U-Bahn'};
+  if(/^S\d/i.test(n)) return {color:'#0060AA',kind:'S-Bahn'};
+  if(/^N?\d+[AB]$/i.test(n)) return {color:'#1D71B8',kind:'Bus'};
+  if(/^N\d+$/i.test(n)) return {color:'#143a63',kind:'Nightline'};
+  if(/^(D|O|\d+)$/i.test(n)) return {color:'#C0242B',kind:'Tram'};
+  return {color:'#5a6875',kind:''};
+}
+function bullet(name,sm){
+  const s=lineStyle(name);
+  return `<span class="bullet${sm?' sm':''}" style="background:${s.color}">${esc(name)}</span>`;
+}
+
+/* ========================= STOP DIRECTORY =========================
+   wienerlinien-ogd-haltepunkte.csv: StopID;DIVA;StopText;Municipality;MunicipalityID;Longitude;Latitude
+   We group platforms (StopIDs) into stations by DIVA. */
+let STATIONS=[]; // {diva,name,lat,lon}
+async function loadStops(){
+  $('stopCount').innerHTML='<span class="spin"></span>'+t('loadingStops');
+  // 7-day cache when storage is available (ignored silently otherwise)
+  try{
+    const c=JSON.parse(localStorage.getItem('wg_stops')||'null');
+    if(c && Date.now()-c.ts<7*864e5 && c.v===2){ STATIONS=c.s; stopsReady(); return; }
+  }catch(e){}
+  try{
+    const res=await fetch(prox(URLS.stops));
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const text=await res.text();
+    const byDiva={};
+    text.split(/\r?\n/).slice(1).forEach(line=>{
+      const f=line.split(';').map(x=>x.replace(/^"|"$/g,'').trim());
+      if(f.length<7) return;
+      const [ ,diva,name, , ,lon,lat]=f;
+      const la=parseFloat(lat),lo=parseFloat(lon);
+      if(!diva||!name||isNaN(la)||isNaN(lo)) return;
+      const e=byDiva[diva]||(byDiva[diva]={diva,name,lat:0,lon:0,n:0});
+      e.lat+=la; e.lon+=lo; e.n++;
+    });
+    STATIONS=Object.values(byDiva).map(e=>({diva:e.diva,name:e.name,lat:e.lat/e.n,lon:e.lon/e.n}));
+    try{localStorage.setItem('wg_stops',JSON.stringify({ts:Date.now(),v:2,s:STATIONS}));}catch(e){}
+    stopsReady();
+  }catch(err){
+    $('stopCount').textContent='';
+    if(!PROXY_URL) $('proxyBanner').style.display='block';
+    showErr(t('netErr')+' ('+err.message+')');
+  }
+}
+function stopsReady(){ $('stopCount').textContent=t('stopsReady')(STATIONS.length); renderNearby(); }
+function searchStations(q){
+  q=q.toLowerCase();
+  return STATIONS.filter(s=>s.name.toLowerCase().includes(q))
+    .sort((a,b)=>a.name.toLowerCase().indexOf(q)-b.name.toLowerCase().indexOf(q)||a.name.length-b.name.length)
+    .slice(0,7);
+}
+
+/* ========================= GEOLOCATION ========================= */
+let myPos=null,watchId=null;
+function startGeo(){
+  if(!('geolocation' in navigator)) return;
+  watchId=navigator.geolocation.watchPosition(p=>{
+    myPos=[p.coords.latitude,p.coords.longitude];
+    meMarker.setLatLng(myPos).addTo(map);
+    renderNearby();
+    if(journeyOn) journeyTick();
+  },()=>{},{enableHighAccuracy:true,maximumAge:5000,timeout:15000});
+}
+function renderNearby(){
+  if(!myPos||!STATIONS.length){$('nearbyChips').innerHTML='';return;}
+  const near=[...STATIONS].sort((a,b)=>dist(myPos,[a.lat,a.lon])-dist(myPos,[b.lat,b.lon])).slice(0,4);
+  $('nearbyChips').innerHTML=`<span class="hint" style="margin:4px 4px 0 0">${t('nearby')}</span>`+
+    near.map(s=>{
+      const m=Math.round(dist(myPos,[s.lat,s.lon])*1000);
+      return `<button class="chip" onclick="pickStation('${s.diva}')">${esc(s.name)}<small>${m} m</small></button>`;
+    }).join('');
+}
+function useNearest(){
+  if(!myPos){ showErr(t('geoDenied')); startGeo(); return; }
+  if(!STATIONS.length) return;
+  const s=[...STATIONS].sort((a,b)=>dist(myPos,[a.lat,a.lon])-dist(myPos,[b.lat,b.lon]))[0];
+  pickStation(s.diva);
+}
+
+/* ========================= DEPARTURES (real-time monitor) ========================= */
+let currentStation=null,depData=null,depTimer=null;
+function pickStation(diva){
+  currentStation=STATIONS.find(s=>s.diva===diva);
+  $('stopSearch').value=currentStation.name;
+  $('sugList').style.display='none';
+  fetchDeps();
+  clearInterval(depTimer);
+  depTimer=setInterval(fetchDeps,30000); // refresh every 30 s
+}
+async function fetchDeps(){
+  if(!currentStation) return;
+  if(!depData) $('depBoard').innerHTML=`<div class="empty"><span class="spin"></span>${t('loadingDeps')}</div>`;
+  try{
+    const res=await fetch(prox(URLS.monitor(currentStation.diva)));
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const j=await res.json();
+    depData=j.data||{};
+    renderBoard();
+  }catch(err){
+    depData=null;
+    $('depBoard').innerHTML=`<div class="empty">${esc(t('netErr'))}</div>`;
+    if(!PROXY_URL) $('proxyBanner').style.display='block';
+  }
+}
+function renderBoard(){
+  if(!currentStation) return;
+  if(!depData){ return; }
+  const rows=[]; // {line,towards,cds:[{m,rt}],type}
+  (depData.monitors||[]).forEach(mon=>{
+    (mon.lines||[]).forEach(l=>{
+      const deps=((l.departures||{}).departure||[]).slice(0,2).map(d=>({
+        m:d.departureTime?.countdown ?? null,
+        rt:!!d.departureTime?.timeReal
+      })).filter(d=>d.m!==null);
+      if(!deps.length) return;
+      rows.push({line:l.name,towards:l.towards?.trim(),cds:deps});
+    });
+  });
+  rows.sort((a,b)=>a.cds[0].m-b.cds[0].m);
+  let html=`<div class="stop-head"><h2>${esc(currentStation.name)}</h2>
+    <span class="live-tag"><span class="live-dot"></span>Live</span></div>`;
+  if(!rows.length) html+=`<div class="empty">–</div>`;
+  rows.forEach(r=>{
+    const s=lineStyle(r.line);
+    const first=r.cds[0],next=r.cds[1];
+    const isNow=first.m<1;
+    html+=`<div class="dep">
+      ${bullet(r.line)}
+      <div class="grow">
+        <div class="dest">${t('towards')} ${esc(r.towards||'')}</div>
+        <div class="kind"><span class="rt ${first.rt?'':'plan'}"></span>${s.kind}${first.rt?'':' · Plan'}</div>
+      </div>
+      <div class="cd ${isNow?'now':''}">${isNow?t('now'):first.m}${next?`<span class="then">, ${next.m}</span>`:''}
+        <small>${isNow?'':t('min')}</small></div>
+    </div>`;
+  });
+  // service disruptions, if any
+  (depData.trafficInfos||[]).slice(0,3).forEach(ti=>{
+    html+=`<div class="banner warn">⚠️ <b>${esc(ti.title||'')}</b> ${esc(ti.description||'')}</div>`;
+  });
+  $('depBoard').innerHTML=html;
+}
+
+/* ========================= SEARCH UIs ========================= */
+function wireSearch(inputId,listId,onPick,allowMe){
+  const inp=$(inputId),list=$(listId);
+  inp.addEventListener('input',()=>{
+    inp.dataset.diva=''; inp.dataset.me='';
+    const q=inp.value.trim();
+    if(q.length<2){list.style.display='none';return;}
+    let hits=searchStations(q);
+    let html='';
+    if(allowMe && myPos) html+=`<button data-me="1">📍 ${t('myLoc')}</button>`;
+    html+=hits.map(s=>`<button data-diva="${s.diva}">${esc(s.name)}<small>${s.diva}</small></button>`).join('');
+    if(!html){list.style.display='none';return;}
+    list.innerHTML=html; list.style.display='block';
+    list.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
+      if(b.dataset.me){ inp.value='📍 '+t('myLoc'); inp.dataset.me='1'; }
+      else{ const s=STATIONS.find(x=>x.diva===b.dataset.diva); inp.value=s.name; inp.dataset.diva=s.diva; }
+      list.style.display='none';
+      onPick&&onPick();
+    }));
+  });
+}
+document.addEventListener('click',e=>{
+  if(!e.target.closest('.suggest')) document.querySelectorAll('.sug-list').forEach(l=>l.style.display='none');
+});
+wireSearch('stopSearch','sugList',null,false);
+$('sugList').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(b&&b.dataset.diva) pickStation(b.dataset.diva);
+});
+wireSearch('fromInput','fromSug',null,true);
+wireSearch('toInput','toSug',null,false);
+function swapFromTo(){
+  const f=$('fromInput'),to=$('toInput');
+  if(f.dataset.me) return;
+  [f.value,to.value]=[to.value,f.value];
+  [f.dataset.diva,to.dataset.diva]=[to.dataset.diva,f.dataset.diva];
+}
+
+/* ========================= ROUTING (EFA XML_TRIP_REQUEST2) ========================= */
+let lastTrips=null,selIdx=0;
+function efaParams(){
+  const f=$('fromInput'),to=$('toInput');
+  const p=new URLSearchParams({
+    outputFormat:'JSON',language:lang,
+    coordOutputFormat:'WGS84[DD.ddddd]',
+    itdTripDateTimeDepArr:'dep',calcNumberOfTrips:'3',
+    useRealtime:'1',locationServerActive:'1',ptOptionsActive:'1'
+  });
+  if(f.dataset.me&&myPos){
+    p.set('type_origin','coord');
+    p.set('name_origin',myPos[1].toFixed(6)+':'+myPos[0].toFixed(6)+':WGS84[DD.ddddd]');
+  }else if(f.dataset.diva){
+    p.set('type_origin','stop'); p.set('name_origin',f.dataset.diva);
+  }else return null;
+  if(to.dataset.diva){ p.set('type_destination','stop'); p.set('name_destination',to.dataset.diva); }
+  else return null;
+  return p.toString();
+}
+async function planRoute(){
+  const q=efaParams();
+  if(!q){ showErr(lang==='de'?'Bitte Start und Ziel aus der Liste wählen.':'Please pick origin and destination from the list.'); return; }
+  stopJourney();
+  $('planBtn').disabled=true;
+  $('routeResults').innerHTML=`<div class="empty"><span class="spin"></span>${t('searching')}</div>`;
+  try{
+    const res=await fetch(prox(URLS.route(q)));
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const j=await res.json();
+    lastTrips=normalizeTrips(j);
+    if(!lastTrips.length){ $('routeResults').innerHTML=`<div class="empty">${t('noRoute')}</div>`; return; }
+    selIdx=0; renderOptions(); selectOption(0);
+  }catch(err){
+    $('routeResults').innerHTML=`<div class="empty">${esc(t('netErr'))}</div>`;
+    if(!PROXY_URL) $('proxyBanner').style.display='block';
+  }finally{ $('planBtn').disabled=false; }
+}
+// Tolerant EFA-JSON normalizer -> [{durMin,changes,legs:[{walk,line,dest,from,to,depT,arrT,pts}]}]
+function normalizeTrips(j){
+  let trips=j?.trips||[];
+  if(!Array.isArray(trips)) trips=trips.trip?[].concat(trips.trip):[];
+  trips=trips.map(x=>x.trip||x).filter(Boolean);
+  return trips.map(tr=>{
+    let legs=tr.legs||tr.leg||[];
+    if(!Array.isArray(legs)) legs=[legs];
+    const L=legs.map(l=>{
+      const modeName=(l.mode?.name||'').trim();
+      const num=(l.mode?.number||'').trim()||modeName.split(/\s+/).pop();
+      const walk=/fu(ß|ss)weg|footpath|walk|gehweg/i.test(modeName)||l.mode?.type===99||l.mode?.type===100;
+      const p0=(l.points||[])[0]||{},p1=(l.points||[]).slice(-1)[0]||{};
+      const pts=parsePath(l.path)|| [coordOf(p0),coordOf(p1)].filter(Boolean);
+      return {
+        walk, line:walk?null:num, dest:(l.mode?.destination||'').trim(),
+        from:p0.name||p0.nameWO||'', to:p1.name||p1.nameWO||'',
+        depT:p0.dateTime?.time||'', arrT:p1.dateTime?.time||'',
+        rt:!!(p0.dateTime?.rtTime||l.realtime), pts,
+        durMin:hhmmToMin(l.timeMinute?null:l.mode?.time)||null
+      };
+    }).filter(l=>l.pts&&l.pts.length>=2);
+    const durMin=hhmmToMin(tr.duration)||L.reduce((a,l)=>a+(l.durMin||0),0);
+    const changes=Math.max(0,L.filter(l=>!l.walk).length-1);
+    return {durMin,changes,legs:L};
+  }).filter(tr=>tr.legs.length);
+}
+function hhmmToMin(s){
+  if(!s||typeof s!=='string'||!/^\d{1,2}:\d{2}$/.test(s)) return null;
+  const [h,m]=s.split(':').map(Number); return h*60+m;
+}
+function coordOf(p){
+  const c=p.ref?.coords||p.ref?.coord||'';
+  const parts=String(c).split(/[,;]/).map(Number);
+  if(parts.length<2||parts.some(isNaN)) return null;
+  return orient(parts[0],parts[1]);
+}
+function parsePath(path){
+  if(!path||typeof path!=='string') return null;
+  const pts=path.trim().split(/\s+/).map(pair=>{
+    const [a,b]=pair.split(',').map(Number);
+    if(isNaN(a)||isNaN(b)) return null;
+    return orient(a,b);
+  }).filter(Boolean);
+  return pts.length>=2?pts:null;
+}
+// Vienna sanity: lat≈48, lon≈16 — auto-detect coordinate order
+function orient(a,b){ return a>b?[a,b]:[b,a]; }
+
+function renderOptions(){
+  const el=$('routeResults');
+  if(!lastTrips||!lastTrips.length){el.innerHTML=`<div class="empty">${t('noRoute')}</div>`;return;}
+  el.innerHTML=lastTrips.map((tr,i)=>{
+    const first=tr.legs[0],last=tr.legs[tr.legs.length-1];
+    const segHtml=tr.legs.map((l,j)=>{
+      const piece=l.walk?`<span class="seg-walk">🚶 ${t('walk')}</span>`:bullet(l.line,true);
+      return piece+(j<tr.legs.length-1?'<span class="seg-arrow">→</span>':'');
+    }).join('');
+    return `<div class="card opt ${i===selIdx?'sel':''}" onclick="selectOption(${i})">
+      <div class="opt-top">
+        <span class="opt-time">${esc(first.depT)} → ${esc(last.arrT)}
+          ${i===0?`<span class="badge-best">${t('best')}</span>`:''}</span>
+        <span class="opt-dur">${tr.durMin||'–'}<small>${t('min')}</small></span>
+      </div>
+      <div class="segs">${segHtml}</div>
+      <div class="opt-meta">${t('changes')(tr.changes)} · ${t('depart')} ${esc(first.from)} · ${t('arrive')} ${esc(last.to)}</div>
+    </div>`;
+  }).join('');
+}
+
+/* ========================= MAP ========================= */
+const map=L.map('map',{zoomControl:false}).setView([48.2082,16.3738],13);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
+  attribution:'&copy; OpenStreetMap · &copy; CARTO',maxZoom:19}).addTo(map);
+L.control.zoom({position:'bottomright'}).addTo(map);
+const meIcon=L.divIcon({className:'',html:'<div class="me-dot"></div>',iconSize:[16,16],iconAnchor:[8,8]});
+const meMarker=L.marker([48.2082,16.3738],{icon:meIcon,zIndexOffset:1000});
+let routeLayer=L.layerGroup().addTo(map);
+function recenterMe(){
+  if(myPos) map.setView(myPos,15,{animate:true});
+  else { showErr(t('geoDenied')); startGeo(); }
+}
+let routePts=[]; // [{pt,next}] for progress tracking
+function selectOption(i){
+  stopJourney();
+  selIdx=i; renderOptions();
+  const tr=lastTrips[i];
+  routeLayer.clearLayers(); routePts=[];
+  const bounds=[];
+  tr.legs.forEach((l,li)=>{
+    const style=l.walk?{color:'#8B98A5',weight:4,dashArray:'2 8'}
+                      :{color:lineStyle(l.line).color,weight:6,opacity:.95};
+    L.polyline(l.pts,style).addTo(routeLayer);
+    l.pts.forEach(p=>{bounds.push(p);routePts.push({pt:p,next:l.to});});
+    const endPt=l.pts[l.pts.length-1];
+    const isLast=li===tr.legs.length-1;
+    L.marker(endPt,{icon:L.divIcon({className:'',html:'<div class="stop-pin"></div>',iconSize:[12,12],iconAnchor:[6,6]})})
+      .addTo(routeLayer).bindPopup(`<b>${esc(l.to)}</b>${isLast?' 🏁':''}`);
+    if(li===0) L.marker(l.pts[0],{icon:L.divIcon({className:'',html:'<div class="stop-pin"></div>',iconSize:[12,12],iconAnchor:[6,6]})})
+      .addTo(routeLayer).bindPopup(`<b>${esc(l.from)}</b>`);
+  });
+  if(bounds.length) map.fitBounds(L.latLngBounds(bounds).pad(.15));
+  $('goBtn').style.display='block';
+  $('goBtn').textContent=t('startJourney');
+}
+
+/* ========================= JOURNEY MODE (real GPS along route) ========================= */
+let journeyOn=false;
+function toggleJourney(){ journeyOn?stopJourney():startJourney(); }
+function startJourney(){
+  if(!routePts.length) return;
+  if(!myPos){ showErr(t('geoDenied')); startGeo(); return; }
+  journeyOn=true;
+  $('journey').classList.add('on');
+  $('goBtn').textContent=t('stopJourney');
+  journeyTick();
+}
+function journeyTick(){
+  if(!journeyOn||!myPos) return;
+  // nearest route vertex -> progress + next stop
+  let bi=0,bd=1e9;
+  routePts.forEach((r,i)=>{const d=dist(myPos,r.pt);if(d<bd){bd=d;bi=i;}});
+  const p=bi/(routePts.length-1);
+  $('prog').style.width=(p*100)+'%';
+  const off=Math.round(bd*1000);
+  $('nextStop').innerHTML=`${t('nextStop')}: <b>${esc(routePts[bi].next)}</b>`+
+    (off>500?` · ${t('offRoute')(off)}`:'');
+  map.panTo(myPos,{animate:true});
+}
+function stopJourney(){
+  journeyOn=false;
+  $('journey').classList.remove('on');
+  $('goBtn').textContent=t('startJourney');
+  $('prog').style.width='0%';
+}
+
+/* ========================= NAV / INIT ========================= */
+function showView(v){
+  $('tabDep').classList.toggle('on',v==='dep');
+  $('tabRoute').classList.toggle('on',v==='route');
+  $('view-dep').classList.toggle('on',v==='dep');
+  $('view-route').classList.toggle('on',v==='route');
+  if(v==='route') setTimeout(()=>map.invalidateSize(),60);
+}
+if(!PROXY_URL) $('proxyBanner').style.display='block';
+loadStops();
+startGeo();
+</script>
+</body>
+</html>
