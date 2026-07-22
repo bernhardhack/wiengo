@@ -274,8 +274,13 @@ const URLS = {
   stopfinder: q => WL + '/ogd_routing/XML_STOPFINDER_REQUEST?' + new URLSearchParams({
     outputFormat:'JSON', type_sf:'any', name_sf:q,
     locationServerActive:'1', coordOutputFormat:'WGS84[DD.ddddd]'
+  }),
+  dm: (la,lo) => WL + '/ogd_routing/XML_DM_REQUEST?' + new URLSearchParams({
+    outputFormat:'JSON', type_dm:'coord', name_dm:lo.toFixed(6)+':'+la.toFixed(6)+':WGS84',
+    mode:'direct', useRealtime:'1', limit:'14', coordOutputFormat:'WGS84[DD.ddddd]'
   })
 };
+const GBFS = 'https://gbfs.nextbike.net/maps/gbfs/v2/nextbike_wr/en/';
 const prox = url => PROXY_URL ? PROXY_URL.replace(/\/$/,'') + '/?u=' + encodeURIComponent(url) : url;
 
 /* ========================= i18n ========================= */
@@ -346,6 +351,7 @@ function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;',
 const METRO_COLORS={U1:'#E20613',U2:'#9F5F9F',U3:'#EF7D00',U4:'#00963F',U5:'#0098A1',U6:'#8C6239'};
 function lineStyle(name){
   const n=(name||'').trim();
+  if(n==='🚲') return {color:'#0FA3A3',kind:'WienMobil Rad'};
   if(METRO_COLORS[n]) return {color:METRO_COLORS[n],kind:'U-Bahn'};
   if(/^S\d/i.test(n)) return {color:'#0060AA',kind:'S-Bahn'};
   if(/^N?\d+[AB]$/i.test(n)) return {color:'#1D71B8',kind:'Bus'};
@@ -433,7 +439,7 @@ function renderNearby(){
 function useNearest(){
   if(!myPos){ showErr(t('geoDenied')); startGeo(); return; }
   if(!STATIONS.length) return;
-  boardPos=null; boardLabel=null;
+  boardPos=null; boardLabel=null; efaStop=null;
   depMode='nearby'; currentStation=null; depData=null; nearbyList=[];
   $('stopSearch').value=''; syncClears();
   fetchNearby();
@@ -441,7 +447,7 @@ function useNearest(){
   depTimer=setInterval(fetchNearby,30000);
 }
 function setBoardCenter(coord,label){
-  boardPos=coord; boardLabel=label;
+  boardPos=coord; boardLabel=label; efaStop=null;
   depMode='nearby'; currentStation=null; depData=null; nearbyList=[];
   fetchNearby();
   clearInterval(depTimer);
@@ -450,9 +456,9 @@ function setBoardCenter(coord,label){
 
 /* ========================= DEPARTURES (real-time monitor) ========================= */
 let currentStation=null,depData=null,depTimer=null,depMode='single',nearbyList=[],autoNearby=false,
-    boardPos=null,boardLabel=null;
+    boardPos=null,boardLabel=null,efaStop=null;
 function pickStation(diva){
-  depMode='single'; nearbyList=[];
+  depMode='single'; nearbyList=[]; efaStop=null;
   currentStation=STATIONS.find(s=>s.diva===diva);
   $('stopSearch').value=currentStation.name;
   $('sugList').style.display='none';
@@ -559,6 +565,48 @@ function renderNearbyBoard(){
   if(!nearbyList.length) html+=`<div class="empty">–</div>`;
   $('depBoard').innerHTML=html;
 }
+/* ---- EFA departure board: covers non-WL stations like S-Bahn (experimental) ---- */
+function pickEfaStop(name,coord){
+  depMode='efa'; currentStation=null; nearbyList=[]; efaStop={name,coord};
+  fetchEfaDeps();
+  clearInterval(depTimer);
+  depTimer=setInterval(fetchEfaDeps,30000);
+}
+async function fetchEfaDeps(){
+  if(!efaStop) return;
+  if(!$('depBoard').querySelector('.dep'))
+    $('depBoard').innerHTML=`<div class="empty"><span class="spin"></span>${t('loadingDeps')}</div>`;
+  try{
+    const r=await fetch(prox(URLS.dm(efaStop.coord[0],efaStop.coord[1])));
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const j=await r.json();
+    let deps=j.departureList||[];
+    if(!Array.isArray(deps)) deps=[].concat(deps.departure||[]);
+    const grouped={};
+    deps.forEach(d=>{
+      const sl=d.servingLine||{};
+      const line=(sl.symbol||sl.number||'').trim();
+      const cd=parseInt(d.countdown,10);
+      if(!line||isNaN(cd)) return;
+      const key=line+'|'+(sl.direction||'');
+      (grouped[key]=grouped[key]||{line,towards:(sl.direction||'').trim(),cds:[]})
+        .cds.push({m:cd,rt:!!d.realDateTime});
+    });
+    const rows=Object.values(grouped)
+      .map(r=>({...r,cds:r.cds.sort((a,b)=>a.m-b.m).slice(0,2)}))
+      .sort((a,b)=>a.cds[0].m-b.cds[0].m);
+    if(!rows.length) throw new Error('empty');
+    if(depMode!=='efa') return;
+    let html=`<div class="stop-head"><h2>${esc(efaStop.name)}</h2>
+      <span class="live-tag"><span class="live-dot"></span>Live · EFA</span></div>`;
+    rows.forEach(r=>html+=depRowHtml(r,null));
+    $('depBoard').innerHTML=html;
+  }catch(err){
+    // endpoint unhappy -> fall back to the nearby board around that spot
+    const s=efaStop; efaStop=null;
+    setBoardCenter(s.coord,s.name);
+  }
+}
 // show the nearby board automatically once stops + position are available
 function maybeAutoNearby(){
   if(autoNearby||currentStation||depMode==='nearby') return;
@@ -609,7 +657,7 @@ function wireSearch(inputId,listId,onPick,allowMe){
       // plus stopfinder results: addresses, POIs, non-WL stations (skip WL duplicates)
       (extra||[]).forEach(p=>{
         if(p.kind==='stop'&&localNames.has(norm(p.name))) return;
-        html+=`<button data-coord="${p.coord[0].toFixed(6)},${p.coord[1].toFixed(6)}">📌 ${esc(p.name)}</button>`;
+        html+=`<button data-kind="${esc(p.kind)}" data-coord="${p.coord[0].toFixed(6)},${p.coord[1].toFixed(6)}">📌 ${esc(p.name)}</button>`;
       });
     }else{
       // empty: my location, Home, Work, frequent, then nearest
@@ -647,11 +695,12 @@ function wireSearch(inputId,listId,onPick,allowMe){
         inp.value='📍 '+t('myLoc'); inp.dataset.me='1'; inp.dataset.diva=''; inp.dataset.coord='';
       }else if(b.dataset.coord){
         const name=b.textContent.replace(/^📌\s*/,'').trim();
-        if(inputId==='stopSearch'){        // departures: recenter nearby board on the address
+        if(inputId==='stopSearch'){
           const [la,lo]=b.dataset.coord.split(',').map(Number);
           inp.value=name;
           list.style.display='none'; syncClears();
-          setBoardCenter([la,lo],name);
+          if(b.dataset.kind==='stop') pickEfaStop(name,[la,lo]);   // S-Bahn etc: EFA departure board
+          else setBoardCenter([la,lo],name);                        // address: recenter nearby board
           return;
         }
         inp.value=name; inp.dataset.coord=b.dataset.coord; inp.dataset.diva=''; inp.dataset.me='';
@@ -749,10 +798,118 @@ async function planRoute(){
     lastTrips=normalizeTrips(j);
     if(!lastTrips.length){ $('routeResults').innerHTML=`<div class="empty">${t('noRoute')}</div>`; return; }
     selIdx=0; renderOptions(); selectOption(0);
+    tryBikeOption(); // async: appends a 🚲 option if a bike station with bikes is nearby
   }catch(err){
     $('routeResults').innerHTML=`<div class="empty">${esc(t('netErr'))}</div>`;
     if(!PROXY_URL) $('proxyBanner').style.display='block';
   }finally{ $('planBtn').disabled=false; }
+}
+
+/* ========================= BIKE-SHARE (WienMobil Rad via GBFS) ========================= */
+let BIKES=null;
+async function loadBikeStations(){
+  if(BIKES) return BIKES;
+  try{
+    const r=await fetch(prox(GBFS+'station_information.json'));
+    if(!r.ok) return null;
+    const j=await r.json();
+    BIKES=((j.data||{}).stations||[]).map(s=>({id:s.station_id,name:s.name,lat:s.lat,lon:s.lon}))
+      .filter(s=>s.lat&&s.lon);
+    return BIKES;
+  }catch(e){ return null; }
+}
+async function bikeAvailability(){
+  try{
+    const r=await fetch(prox(GBFS+'station_status.json'));
+    if(!r.ok) return null;
+    const j=await r.json();
+    const m={};
+    ((j.data||{}).stations||[]).forEach(s=>{
+      m[s.station_id]=(s.is_renting===0||s.is_renting===false)?0:(s.num_bikes_available||0);
+    });
+    return m;
+  }catch(e){ return null; }
+}
+function fieldCoord(inp){
+  if(inp.dataset.me&&myPos) return myPos;
+  if(inp.dataset.coord){const [la,lo]=inp.dataset.coord.split(',').map(Number);return [la,lo];}
+  if(inp.dataset.diva){const s=STATIONS.find(x=>x.diva===inp.dataset.diva);return s?[s.lat,s.lon]:null;}
+  return null;
+}
+function efaQueryCoordOrigin(c,depDate){
+  const to=$('toInput');
+  const pad=n=>String(n).padStart(2,'0');
+  const p=new URLSearchParams({
+    outputFormat:'JSON',language:lang,coordOutputFormat:'WGS84[DD.ddddd]',
+    itdTripDateTimeDepArr:'dep',calcNumberOfTrips:'1',
+    useRealtime:'1',locationServerActive:'1',ptOptionsActive:'1',
+    itdDate:''+depDate.getFullYear()+pad(depDate.getMonth()+1)+pad(depDate.getDate()),
+    itdTime:pad(depDate.getHours())+pad(depDate.getMinutes())
+  });
+  p.set('type_origin','coord');
+  p.set('name_origin',c[1].toFixed(6)+':'+c[0].toFixed(6)+':WGS84');
+  if(to.dataset.me&&myPos){
+    p.set('type_destination','coord');
+    p.set('name_destination',myPos[1].toFixed(6)+':'+myPos[0].toFixed(6)+':WGS84');
+  }else if(to.dataset.coord){
+    const [la,lo]=to.dataset.coord.split(',').map(Number);
+    p.set('type_destination','coord'); p.set('name_destination',lo.toFixed(6)+':'+la.toFixed(6)+':WGS84');
+  }else if(to.dataset.diva){
+    p.set('type_destination','stop'); p.set('name_destination',to.dataset.diva);
+  }else return null;
+  return p.toString();
+}
+async function tryBikeOption(){
+  try{
+    if(!lastTrips||lastTrips.some(x=>x.bike)) return;
+    const o=fieldCoord($('fromInput')),dst=fieldCoord($('toInput'));
+    if(!o||!dst) return;
+    const [stations,avail]=await Promise.all([loadBikeStations(),bikeAvailability()]);
+    if(!stations||!stations.length) return;
+    const bikesAt=s=>avail?(avail[s.id]||0):null;
+    // start: bike station within 350 m of origin, with a bike available
+    const start=stations.map(s=>({s,d:dist(o,[s.lat,s.lon])}))
+      .filter(x=>x.d<=0.35&&(avail?bikesAt(x.s)>0:true))
+      .sort((a,b)=>a.d-b.d)[0];
+    if(!start) return;
+    const rideKm=(a,b)=>dist(a,b)*1.3;                 // straight-line + detour factor
+    const bikeMin=km=>Math.round(km/16*60)+2;          // ~16 km/h + unlock buffer
+    const dDirect=dist(o,dst);
+    // hub: ride 0.8–5 km, must bring you meaningfully closer; score bike time + rough onward-transit time
+    const hub=stations.map(s=>{
+      const hc=[s.lat,s.lon];
+      return {s,ride:rideKm([start.s.lat,start.s.lon],hc),rem:dist(hc,dst)};
+    }).filter(h=>h.ride>=0.8&&h.ride<=5&&h.rem<=dDirect-0.8)
+      .sort((a,b)=>(bikeMin(a.ride)+a.rem/25*60)-(bikeMin(b.ride)+b.rem/25*60))[0];
+    if(!hub) return;
+    const walkM=Math.round(start.d*1000);
+    const walkMin=Math.max(1,Math.round(walkM/75));
+    const bMin=bikeMin(hub.ride);
+    const dep=new Date(Date.now()+(walkM>30?walkMin:0)*60000+bMin*60000+3*60000); // +3 min docking/buffer
+    const q=efaQueryCoordOrigin([hub.s.lat,hub.s.lon],dep);
+    if(!q) return;
+    const res=await fetch(prox(URLS.route(q)));
+    if(!res.ok) return;
+    const trips=normalizeTrips(await res.json());
+    if(!trips.length) return;
+    const tr=trips[0];
+    const now=new Date();
+    const legs=[];
+    if(walkM>30) legs.push({walk:true,line:null,dest:'',from:$('fromInput').value||'',to:start.s.name,
+      depT:fmtClock(now),arrT:'',legDur:walkMin,rt:false,pts:[o,[start.s.lat,start.s.lon]],stops:[],distM:walkM});
+    legs.push({walk:false,bike:true,line:'🚲',dest:hub.s.name,from:start.s.name,to:hub.s.name,
+      depT:legs.length?'':fmtClock(now),arrT:'',legDur:bMin,rt:false,
+      pts:[[start.s.lat,start.s.lon],[hub.s.lat,hub.s.lon]],stops:[],
+      distM:Math.round(hub.ride*1000),bikes:bikesAt(start.s)});
+    legs.push(...tr.legs);
+    const lastArr=tr.legs[tr.legs.length-1].arrT;
+    const durMin=minsBetween(fmtClock(now),lastArr)||((walkM>30?walkMin:0)+bMin+3+(tr.durMin||0));
+    lastTrips.push({durMin,changes:tr.changes+1,legs,bike:true});
+    renderOptions();
+  }catch(e){ /* bike option is best-effort; never break normal results */ }
+}
+function fmtClock(d){
+  return d.toLocaleTimeString(lang==='de'?'de-AT':'en-GB',{hour:'2-digit',minute:'2-digit'});
 }
 // Tolerant EFA-JSON normalizer -> [{durMin,changes,legs:[{walk,line,dest,from,to,depT,arrT,pts}]}]
 function normalizeTrips(j){
@@ -843,6 +1000,9 @@ function renderOptions(){
       if(l.walk){
         body=`<b>🚶 ${t('walk')}</b>${l.distM?` · ${l.distM} m`:''}${l.legDur?` · ${l.legDur} ${t('min')}`:''}
           <div class="leg-dir">${esc(l.from)} → ${esc(l.to)}</div>`;
+      }else if(l.bike){
+        body=`${bullet('🚲',true)} <b>${esc(l.from)} → ${esc(l.to)}</b>
+          <div class="leg-dir">${l.distM?`~${(l.distM/1000).toFixed(1)} km`:''}${l.legDur?` · ~${l.legDur} ${t('min')}`:''}${l.bikes!=null?` · ${l.bikes} 🚲`:''}</div>`;
       }else{
         const mids=l.stops.slice(1,-1);
         const startC=coordAttr((l.stops[0]&&l.stops[0].coord)||l.pts[0]);
@@ -862,7 +1022,7 @@ function renderOptions(){
     return `<div class="card opt ${i===selIdx?'sel':''}" data-i="${i}">
       <div class="opt-top">
         <span class="opt-time">${esc(first.depT)} → ${esc(last.arrT)}
-          ${i===0?`<span class="badge-best">${t('best')}</span>`:''}</span>
+          ${i===0?`<span class="badge-best">${t('best')}</span>`:''}${tr.bike?`<span class="badge-best" style="background:#0FA3A3;color:#04211f">🚲</span>`:''}</span>
         <span class="opt-dur">${tr.durMin||'–'}<small>${t('min')}</small><span class="chev">▾</span></span>
       </div>
       <div class="segs">${segHtml}</div>
@@ -916,7 +1076,8 @@ function selectOption(i){
   const bounds=[];
   tr.legs.forEach((l,li)=>{
     const style=l.walk?{color:'#8B98A5',weight:4,dashArray:'2 8'}
-                      :{color:lineStyle(l.line).color,weight:6,opacity:.95};
+              :l.bike?{color:'#0FA3A3',weight:5,dashArray:'8 10',opacity:.9}
+                     :{color:lineStyle(l.line).color,weight:6,opacity:.95};
     L.polyline(l.pts,style).addTo(routeLayer);
     l.pts.forEach(p=>{
       bounds.push(p);
@@ -1009,6 +1170,7 @@ function doRefresh(){
   if(!STATIONS.length){ loadStops(); return; }   // retry directory after failed load
   if($('view-dep').classList.contains('on')){
     if(depMode==='nearby') fetchNearby();
+    else if(depMode==='efa') fetchEfaDeps();
     else if(currentStation) fetchDeps();
   }else{
     if(lastTrips) planRoute();                    // re-plan with fresh realtime
