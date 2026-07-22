@@ -127,10 +127,7 @@
   .suggest input{padding-right:36px}
   .clear-x{position:absolute;right:9px;top:19px;transform:translateY(-50%);width:22px;height:22px;border-radius:50%;
     background:var(--line);color:var(--text);border:0;cursor:pointer;font-size:11px;line-height:1;display:none;z-index:5}
-  .chev{color:var(--muted);font-size:13px;margin-left:4px;transition:transform .15s;display:inline-block;
-    padding:6px 8px;cursor:pointer;border-radius:6px}
-  .chev:hover{background:var(--panel-2)}
-  .opt.open .chev{transform:rotate(180deg)}
+  .sug-hint{padding:7px 13px;font-size:11px;color:var(--muted);border-top:1px solid var(--line)}
   .legs{display:none;margin-top:10px;border-top:1px solid var(--line);padding-top:12px}
   .opt.open .legs{display:block}
   .leg{display:flex;gap:10px;margin-bottom:12px}
@@ -299,6 +296,7 @@ const I18N = {
       netErr:'Could not reach the Wiener Linien API. Check your PROXY_URL / connection.',
       stopsN:n=>n===1?'1 stop':`${n} stops`,
       savedHome:'Saved as Home',savedWork:'Saved as Work',
+      favHint:'Tap 🏠 / 💼 next to a stop to save it as Home / Work',
       nearbyTitle:'Nearby departures',walkLbl:(m,mi)=>`${m} m · ~${mi} min walk`,
       leaveNow:'🏃 go now',leaveIn:n=>`leave in ${n} min`,
       accHint:a=>`Position only accurate to ~${a} m (typical for laptops) — search an address above to recenter.`,
@@ -317,6 +315,7 @@ const I18N = {
       netErr:'Wiener-Linien-API nicht erreichbar. PROXY_URL / Verbindung prüfen.',
       stopsN:n=>n===1?'1 Station':`${n} Stationen`,
       savedHome:'Als Zuhause gespeichert',savedWork:'Als Arbeit gespeichert',
+      favHint:'🏠 / 💼 neben einer Haltestelle tippen, um sie als Zuhause / Arbeit zu speichern',
       nearbyTitle:'Abfahrten in der Nähe',walkLbl:(m,mi)=>`${m} m · ~${mi} Min zu Fuß`,
       leaveNow:'🏃 jetzt los',leaveIn:n=>`in ${n} Min losgehen`,
       accHint:a=>`Standort nur auf ~${a} m genau (typisch am Laptop) — Adresse oben suchen zum Neuzentrieren.`,
@@ -659,6 +658,7 @@ function wireSearch(inputId,listId,onPick,allowMe){
         if(p.kind==='stop'&&localNames.has(norm(p.name))) return;
         html+=`<button data-kind="${esc(p.kind)}" data-coord="${p.coord[0].toFixed(6)},${p.coord[1].toFixed(6)}">📌 ${esc(p.name)}</button>`;
       });
+      if(html) html+=`<div class="sug-hint">${t('favHint')}</div>`;
     }else{
       // empty: my location, Home, Work, frequent, then nearest
       if(allowMe) html+=`<button data-me="1">📍 ${t('myLoc')}</button>`;
@@ -757,7 +757,7 @@ function swapFromTo(){
 }
 
 /* ========================= ROUTING (EFA XML_TRIP_REQUEST2) ========================= */
-let lastTrips=null,selIdx=0;
+let lastTrips=null,selIdx=0,selOpen=false;
 function efaParams(){
   const f=$('fromInput'),to=$('toInput');
   const p=new URLSearchParams({
@@ -797,7 +797,7 @@ async function planRoute(){
     const j=await res.json();
     lastTrips=normalizeTrips(j);
     if(!lastTrips.length){ $('routeResults').innerHTML=`<div class="empty">${t('noRoute')}</div>`; return; }
-    selIdx=0; renderOptions(); selectOption(0);
+    selIdx=0; selOpen=false; renderOptions(); selectOption(0);
     tryBikeOption(); // async: appends a 🚲 option if a bike station with bikes is nearby
   }catch(err){
     $('routeResults').innerHTML=`<div class="empty">${esc(t('netErr'))}</div>`;
@@ -1019,11 +1019,11 @@ function renderOptions(){
       }
       return `<div class="leg"><div class="leg-rail" style="background:${col}"></div><div class="leg-body">${body}</div></div>`;
     }).join('');
-    return `<div class="card opt ${i===selIdx?'sel':''}" data-i="${i}">
+    return `<div class="card opt ${i===selIdx?'sel':''} ${i===selIdx&&selOpen?'open':''}" data-i="${i}">
       <div class="opt-top">
         <span class="opt-time">${esc(first.depT)} → ${esc(last.arrT)}
           ${i===0?`<span class="badge-best">${t('best')}</span>`:''}${tr.bike?`<span class="badge-best" style="background:#0FA3A3;color:#04211f">🚲</span>`:''}</span>
-        <span class="opt-dur">${tr.durMin||'–'}<small>${t('min')}</small><span class="chev">▾</span></span>
+        <span class="opt-dur">${tr.durMin||'–'}<small>${t('min')}</small></span>
       </div>
       <div class="segs">${segHtml}</div>
       <div class="opt-meta">${t('changes')(tr.changes)} · ${t('depart')} ${esc(first.from)} · ${t('arrive')} ${esc(last.to)}</div>
@@ -1031,7 +1031,6 @@ function renderOptions(){
     </div>`;
   }).join('');
   el.querySelectorAll('.opt').forEach(card=>card.addEventListener('click',e=>{
-    if(e.target.closest('.chev')){ card.classList.toggle('open'); return; } // details only via chevron
     const lt=e.target.closest('.leg-toggle');
     if(lt){ lt.closest('.leg').classList.toggle('open'); return; }         // nested stop reveal
     const stopBtn=e.target.closest('.leg-stops button');
@@ -1045,7 +1044,8 @@ function renderOptions(){
       return;
     }
     const i=+card.dataset.i;
-    if(i!==selIdx) selectOption(i);
+    if(i!==selIdx){ selOpen=true; selectOption(i); }      // tap: select + expand
+    else{ selOpen=!selOpen; card.classList.toggle('open'); } // tap again: collapse
   }));
   updateStopHighlight();
 }
